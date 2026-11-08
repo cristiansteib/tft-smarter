@@ -1,0 +1,17 @@
+.pio/
+.vscode/
+bin/
+
+# Local credentials, sessions, logs and private history backups.
+.env
+.env.*
+!.env.example
+.claude/
+.codex/
+.codebase-memory/
+*.log
+*.pem
+*.key
+*.p12
+*.bundle
+__pycache__/

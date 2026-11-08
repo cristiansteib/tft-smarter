@@ -1,0 +1,175 @@
+[
+  {
+    "changes": {
+      "desk_angle": 40.0,
+      "stack_height": 16.5
+    },
+    "parts": {
+      "01_rear_tray.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 44620.46,
+        "minimum_triangle_area_mm2": 0.0005707740783691406,
+        "print_bounds_mm": [
+          120.0,
+          75.0,
+          24.6
+        ]
+      },
+      "02_front_bezel.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 16783.56,
+        "minimum_triangle_area_mm2": 0.008235286921262741,
+        "print_bounds_mm": [
+          120.0,
+          75.0,
+          6.0
+        ]
+      },
+      "03_desk_cradle.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 102956.25,
+        "minimum_triangle_area_mm2": 0.0012485980987548828,
+        "print_bounds_mm": [
+          112.0,
+          100.0,
+          55.067
+        ]
+      },
+      "04_board_fit_gauge.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 4773.45,
+        "minimum_triangle_area_mm2": 0.01004791259765625,
+        "print_bounds_mm": [
+          108.0,
+          60.0,
+          1.6
+        ]
+      },
+      "05_window_fit_gauge.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 2436.69,
+        "minimum_triangle_area_mm2": 0.0028581619262695312,
+        "print_bounds_mm": [
+          90.0,
+          61.0,
+          1.6
+        ]
+      }
+    },
+    "reference_intersections": {
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_MEGA_PCB": 0.0,
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_USB_B_SOCKET": 0.0,
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_DC_SOCKET": 0.0,
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_SHIELD_ENVELOPE": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_MEGA_PCB": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_USB_B_SOCKET": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_DC_SOCKET": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_SHIELD_ENVELOPE": 0.0,
+      "tray vs lid": 0.0,
+      "assembled tray vs cradle": 0.0023,
+      "assembled lid vs cradle": 0.0
+    }
+  },
+  {
+    "changes": {
+      "desk_angle": 70.0,
+      "stack_height": 24.0,
+      "fit_clearance": 0.4
+    },
+    "parts": {
+      "01_rear_tray.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 52978.12,
+        "minimum_triangle_area_mm2": 0.0002689361572265625,
+        "print_bounds_mm": [
+          120.0,
+          75.0,
+          32.1
+        ]
+      },
+      "02_front_bezel.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 16781.51,
+        "minimum_triangle_area_mm2": 0.008235286921262741,
+        "print_bounds_mm": [
+          120.0,
+          75.0,
+          6.0
+        ]
+      },
+      "03_desk_cradle.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 108512.4,
+        "minimum_triangle_area_mm2": 0.0003190040588378906,
+        "print_bounds_mm": [
+          112.0,
+          100.0,
+          74.959
+        ]
+      },
+      "04_board_fit_gauge.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 4773.45,
+        "minimum_triangle_area_mm2": 0.01004791259765625,
+        "print_bounds_mm": [
+          108.0,
+          60.0,
+          1.6
+        ]
+      },
+      "05_window_fit_gauge.stl": {
+        "nonmanifold_edges": 0,
+        "loose_vertices": 0,
+        "degenerate_faces": 0,
+        "connected_components": 1,
+        "volume_mm3": 2436.69,
+        "minimum_triangle_area_mm2": 0.0028581619262695312,
+        "print_bounds_mm": [
+          90.0,
+          61.0,
+          1.6
+        ]
+      }
+    },
+    "reference_intersections": {
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_MEGA_PCB": 0.0,
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_USB_B_SOCKET": 0.0,
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_DC_SOCKET": 0.0,
+      "TFT_DESK_01_REAR_TRAY vs TFT_DESK_REF_SHIELD_ENVELOPE": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_MEGA_PCB": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_USB_B_SOCKET": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_DC_SOCKET": 0.0,
+      "TFT_DESK_02_FRONT_BEZEL vs TFT_DESK_REF_SHIELD_ENVELOPE": 0.0,
+      "tray vs lid": 0.0,
+      "assembled tray vs cradle": 0.0,
+      "assembled lid vs cradle": 0.0
+    }
+  }
+]

@@ -1,0 +1,62 @@
+{
+  "01_rear_tray.stl": {
+    "triangles": 4512,
+    "nonmanifold_edges_after_welding_0.00001mm": 0,
+    "degenerate_triangles": 0,
+    "signed_volume_mm3": 46849.16,
+    "bounds_mm": [
+      120.0,
+      75.0,
+      26.6
+    ],
+    "minimum_z_mm": 0.0
+  },
+  "02_front_bezel.stl": {
+    "triangles": 2802,
+    "nonmanifold_edges_after_welding_0.00001mm": 0,
+    "degenerate_triangles": 0,
+    "signed_volume_mm3": 16783.55,
+    "bounds_mm": [
+      120.0,
+      75.0,
+      6.0
+    ],
+    "minimum_z_mm": 0.0
+  },
+  "03_desk_cradle.stl": {
+    "triangles": 1380,
+    "nonmanifold_edges_after_welding_0.00001mm": 0,
+    "degenerate_triangles": 0,
+    "signed_volume_mm3": 106746.62,
+    "bounds_mm": [
+      112.0,
+      100.0,
+      66.883
+    ],
+    "minimum_z_mm": 0.0
+  },
+  "04_board_fit_gauge.stl": {
+    "triangles": 1462,
+    "nonmanifold_edges_after_welding_0.00001mm": 0,
+    "degenerate_triangles": 0,
+    "signed_volume_mm3": 4773.45,
+    "bounds_mm": [
+      108.0,
+      60.0,
+      1.6
+    ],
+    "minimum_z_mm": 0.0
+  },
+  "05_window_fit_gauge.stl": {
+    "triangles": 416,
+    "nonmanifold_edges_after_welding_0.00001mm": 0,
+    "degenerate_triangles": 0,
+    "signed_volume_mm3": 2436.69,
+    "bounds_mm": [
+      90.0,
+      61.0,
+      1.6
+    ],
+    "minimum_z_mm": 0.0
+  }
+}

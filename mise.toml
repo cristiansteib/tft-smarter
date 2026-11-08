@@ -1,0 +1,19 @@
+[tools]
+go = "latest"
+python = "3"            # only needed by PlatformIO (pio)
+
+[env]
+TFT_PORT = "/dev/ttyACM0"
+
+[tasks.build]
+description = "Build the host monitor binary"
+run = "go build -ldflags='-s -w' -o bin/tft-monitor ./cmd/tft-monitor"
+
+[tasks.monitor]
+description = "Stream PC stats to the TFT"
+depends = ["build"]
+run = "bin/tft-monitor -port $TFT_PORT"
+
+[tasks.flash]
+description = "Build and upload the firmware (stop the monitor first)"
+run = "pio run -t upload"
