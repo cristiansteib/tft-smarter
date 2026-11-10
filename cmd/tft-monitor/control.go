@@ -20,13 +20,14 @@ type settings struct {
 	LoadTrigger  float64         `json:"loadTrigger"`  // 1-min load per core, %
 	RamTrigger   int             `json:"ramTrigger"`   // RAM used, %
 	CreditStepMs int             `json:"creditStepMs"` // rolling credits: one row per step
-	DwellSec     int             `json:"dwellSec"`     // seconds per page
+	DwellSec     int             `json:"dwellSec"`     // seconds per hog page when both CPU and RAM hogs alternate
+	ReturnSec    int             `json:"returnSec"`    // a page you opened goes back home after this long without a touch
 	Disabled     map[string]bool `json:"disabled"`     // pages never shown
 	Pin          string          `json:"pin"`          // page held on screen ("" = rotate)
 }
 
 func defaultSettings() settings {
-	return settings{HogCPU: 40, HogMem: 8, LoadTrigger: 60, RamTrigger: 80, CreditStepMs: 1400, DwellSec: 12, Disabled: map[string]bool{}}
+	return settings{HogCPU: 40, HogMem: 8, LoadTrigger: 60, RamTrigger: 80, ReturnSec: 60, CreditStepMs: 1400, DwellSec: 12, Disabled: map[string]bool{}}
 }
 
 var (
@@ -58,6 +59,9 @@ func loadCfg() {
 	}
 	c := defaultSettings()
 	if json.Unmarshal(b, &c) == nil {
+		if c.ReturnSec == 0 {
+			c.ReturnSec = 60
+		}
 		if c.Disabled == nil {
 			c.Disabled = map[string]bool{}
 		}
@@ -72,6 +76,7 @@ func setCfg(c settings) {
 	c.RamTrigger = min(max(c.RamTrigger, 10), 100)
 	c.CreditStepMs = min(max(c.CreditStepMs, 300), 5000)
 	c.DwellSec = min(max(c.DwellSec, 2), 120)
+	c.ReturnSec = min(max(c.ReturnSec, 15), 600)
 	if c.Disabled == nil {
 		c.Disabled = map[string]bool{}
 	}
@@ -162,7 +167,7 @@ type alertDoc struct {
 var latest atomic.Pointer[stateDoc]
 
 // allPages is every page the panel knows, in rotation order.
-var allPages = []string{"dash", "docker", "system", "top", "rollcpu", "rollmem"}
+var allPages = []string{"dash", "cpu", "ram", "net", "claude", "docker", "system", "top", "rollcpu", "rollmem"}
 
 func (p *panel) doc(s *snapshot, e *engine, down, up int, uptime uint32, now time.Time) *stateDoc {
 	d := &stateDoc{Connected: true, Updated: now}
@@ -269,6 +274,19 @@ func handleCtl(r ctlReq, e *engine) ctlResp {
 		return ctlResp{OK: true, Data: cfg()}
 	case "next":
 		skipAt.Store(true)
+		return ctlResp{OK: true}
+	case "prev":
+		prevAt.Store(true)
+		return ctlResp{OK: true}
+	case "goto":
+		ok := r.Page == "settings"
+		for _, n := range allPages {
+			ok = ok || n == r.Page
+		}
+		if !ok {
+			return ctlResp{Error: "unknown page"}
+		}
+		queueTouch(touchEv{kind: 'g', page: r.Page})
 		return ctlResp{OK: true}
 	case "notify":
 		sev := map[string]int{"info": sevInfo, "warn": sevWarn, "crit": sevCrit}[r.Sev]

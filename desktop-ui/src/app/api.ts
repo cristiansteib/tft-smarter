@@ -24,7 +24,7 @@ export interface State {
 }
 export interface Settings {
   hogCpu: number; hogMem: number; loadTrigger: number; ramTrigger: number;
-  creditStepMs: number; dwellSec: number;
+  creditStepMs: number; dwellSec: number; returnSec: number;
   disabled: Record<string, boolean>; pin: string;
 }
 
@@ -35,7 +35,7 @@ export class Api {
   readonly settings = signal<Settings | null>(null);
   readonly error = signal<string>('');
   /** last 87 CPU/GPU samples, like the scope on the TFT */
-  readonly history = signal<{ cpu: number; gpu: number }[]>([]);
+  readonly history = signal<{ cpu: number; gpu: number; down: number; up: number }[]>([]);
 
   constructor() {
     this.poll();
@@ -47,7 +47,7 @@ export class Api {
     try {
       const st = await this.ctl<State>({ cmd: 'state' });
       this.state.set(st);
-      if (st.connected) this.history.update((h) => [...h.slice(-86), { cpu: st.gauges.cpu, gpu: st.gauges.gpu }]);
+      if (st.connected) this.history.update((h) => [...h.slice(-86), { cpu: st.gauges.cpu, gpu: st.gauges.gpu, down: st.gauges.down, up: st.gauges.up }]);
       this.error.set('');
     } catch (e) {
       this.error.set(String(e));
@@ -70,6 +70,8 @@ export class Api {
 
   async pin(page: string) { this.settings.set(await this.ctl<Settings>({ cmd: 'pin', page })); }
   next() { return this.ctl({ cmd: 'next' }); }
+  prev() { return this.ctl({ cmd: 'prev' }); }
+  goto(page: string) { return this.ctl({ cmd: 'goto', page }); }
   notify(sev: string, ttl: number, text: string) { return this.ctl({ cmd: 'notify', sev, ttl, text }); }
   service(action: string) { return invoke<string>('service', { action }); }
   logs(lines = 150) { return invoke<string>('logs', { lines }); }

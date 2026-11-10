@@ -15,5 +15,15 @@ depends = ["build"]
 run = "bin/tft-monitor -port $TFT_PORT"
 
 [tasks.flash]
-description = "Build and upload the firmware (stop the monitor first)"
-run = "pio run -t upload"
+description = "Upload the firmware (stops the user service while flashing, then restarts it)"
+run = ["systemctl --user stop tft-monitor || true", "pio run -t upload", "systemctl --user start tft-monitor || true"]
+
+[tasks.ui]
+description = "Desktop app in dev mode (Tauri + Angular)"
+dir = "desktop-ui"
+run = "npm install && npm run app"
+
+[tasks.ui-build]
+description = "Build the desktop app binary"
+dir = "desktop-ui"
+run = "npm install && npm run app:build"

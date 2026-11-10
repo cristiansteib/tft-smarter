@@ -19,6 +19,11 @@ type claudeInfo struct {
 	ctx, s5h, s5hResetMin, wk, busy int
 	addSession, projWeekly, budget  int // forecast: extra session % until reset, projected weekly %, today's budget %
 	sessions, busySessions          int
+	// from the usage file: exact reset times, pace against the daily budget, burn rate and risk
+	sessionResetAt, weeklyResetAt time.Time
+	pace, rate, pOver             float64 // pace: % over (+) or under (-) today's budget; rate: % of the 5 h limit per hour
+	fetchedAt                     time.Time
+	status                        string
 }
 
 var (
@@ -132,12 +137,18 @@ func claudeStats() claudeInfo {
 			SessionPct   float64 `json:"session_pct"`
 			WeeklyPct    float64 `json:"weekly_pct"`
 			SessionReset string  `json:"session_reset"`
+			WeeklyReset  string  `json:"weekly_reset"`
+			FetchedAt    int64   `json:"fetched_at"`
+			Status       string  `json:"status"`
 			Daily        struct {
 				Budget float64 `json:"budget"`
+				Pace   float64 `json:"pace"`
 			} `json:"daily"`
 			Forecast struct {
 				AddSession float64 `json:"add_session"`
 				ProjWeekly float64 `json:"proj_weekly"`
+				Rate       float64 `json:"rate"`
+				POver      float64 `json:"p_over"`
 			} `json:"forecast"`
 		}
 		if json.Unmarshal(b, &u) == nil && u.HasUsage {
@@ -145,6 +156,14 @@ func claudeStats() claudeInfo {
 			c.addSession, c.projWeekly, c.budget = int(u.Forecast.AddSession+0.5), int(u.Forecast.ProjWeekly+0.5), int(u.Daily.Budget+0.5)
 			if t, err := time.Parse(time.RFC3339, u.SessionReset); err == nil {
 				c.s5hResetMin = max(0, int(time.Until(t).Minutes()))
+				c.sessionResetAt = t
+			}
+			if t, err := time.Parse(time.RFC3339, u.WeeklyReset); err == nil {
+				c.weeklyResetAt = t
+			}
+			c.pace, c.rate, c.pOver, c.status = u.Daily.Pace, u.Forecast.Rate, u.Forecast.POver, u.Status
+			if u.FetchedAt > 0 {
+				c.fetchedAt = time.Unix(u.FetchedAt, 0)
 			}
 		}
 	}

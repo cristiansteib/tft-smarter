@@ -49,6 +49,13 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
               }
             </g>
           }
+          @if (st.panel.page === 'net') {
+            <text x="26" y="170" fill="#8a9bb4" font-size="9">Traffic</text>
+            <text x="80" y="170" fill="#27d6b4" font-size="9">down</text><text x="112" y="170" fill="#ff8a3d" font-size="9">up</text>
+            <rect x="25" y="172" width="432" height="77" fill="none" stroke="#29384f" />
+            <polyline [attr.points]="netTrace('up')" fill="none" stroke="#ff8a3d" stroke-width="2" />
+            <polyline [attr.points]="netTrace('down')" fill="none" stroke="#27d6b4" stroke-width="2" />
+          }
           @if (st.panel.page === 'rollcpu') {
             <text x="26" y="170" fill="#9aa3ad" font-size="9">LOAD HISTORY</text>
             <text x="98" y="170" fill="#4fe6ff" font-size="9">CPU</text><text x="122" y="170" fill="#b48cff" font-size="9">GPU</text>
@@ -98,6 +105,15 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
 export class TftScreen {
   s = input.required<State | null>();
   private api = inject(Api);
+
+  /** download / upload trace, scaled to the window's peak like the board does (steps of 4x from 16 KB/s) */
+  netTrace(k: 'down' | 'up') {
+    const h = this.api.history();
+    const peak = Math.max(1, ...h.map((x) => Math.max(x.down, x.up)));
+    let step = 16;
+    while (step < peak && step < 262144) step *= 4;
+    return h.map((x, i) => `${26 + i * 5},${244 - (x[k] * 70) / step}`).join(' ');
+  }
 
   trace(k: 'cpu' | 'gpu') {
     return this.api.history().map((h, i) => `${26 + i * 5},${264 - (h[k] * 88) / 100}`).join(' ');

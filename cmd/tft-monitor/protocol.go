@@ -67,12 +67,14 @@ func claudeFrame(c claudeInfo, docker int) []byte {
 
 // Info-panel (bottom band) frames. The PC lays everything out; the Mega only draws what it is told.
 const (
-	frameSummary = 6 // 22 bytes: uptime s (u32) | Wh x10 (u32) | peak cpu gpu cpuT gpuT avgCpu (u8) | down MB (u32) | up MB (u32) | fullest disk %
-	frameScreen  = 8 // 1 byte: 0 = dashboard (gauges + band), 1 = full-screen page, 2 = full-screen page, cleared first
-	frameLine    = 9 // row (0 = title, 1..9) | style | pct | "label\tvalue" - a row of a full-screen page
-	frameBye     = 7 // 3 bytes: reason (1 off, 2 reboot, 3 monitor stopped) | hh | mm
-	frameBand    = 4 // 3 bytes: page idx | page count | flags (bits0-1 severity, bit2 clear band, bit3 border visible)
-	frameCell    = 5 // slot | style | pct | "label\tvalue"
+	frameSummary = 6  // 22 bytes: uptime s (u32) | Wh x10 (u32) | peak cpu gpu cpuT gpuT avgCpu (u8) | down MB (u32) | up MB (u32) | fullest disk %
+	frameScreen  = 8  // 1 byte: 0 = dashboard (gauges + band), 1 = full-screen page, 2 = full-screen page, cleared first
+	frameLine    = 9  // row (0 = title, 1..9) | style | pct | "label\tvalue" - a row of a full-screen page
+	framePage    = 10 // 1 byte: which bottom-menu entry is showing (255 = none)
+	frameCmd     = 11 // 1 byte: 1 = run the touch calibration
+	frameBye     = 7  // 3 bytes: reason (1 off, 2 reboot, 3 monitor stopped) | hh | mm
+	frameBand    = 4  // 3 bytes: page idx | page count | flags (bits0-1 severity, bit2 clear band, bit3 border visible)
+	frameCell    = 5  // slot | style | pct | "label\tvalue"
 )
 
 // Cell style: low nibble = palette index of the value; high bits are flags.
@@ -148,4 +150,30 @@ func lineFrame(c cell) []byte {
 	f[2] = frameLine
 	f[len(f)-1] = crc8(f[2 : len(f)-1])
 	return f
+}
+
+const cmdCalibrate = 1
+
+func pageFrame(slot byte) []byte { return frame(framePage, []byte{slot}) }
+func cmdFrame(cmd byte) []byte   { return frame(frameCmd, []byte{cmd}) }
+
+// menuSlot maps a page to its entry in the board's bottom menu (Home CPU RAM Net Claude System Setup).
+func menuSlot(name string) byte {
+	switch name {
+	case "dash":
+		return 0
+	case "cpu":
+		return 1
+	case "ram":
+		return 2
+	case "net":
+		return 3
+	case "claude":
+		return 4
+	case "system":
+		return 5
+	case "settings":
+		return 6
+	}
+	return 255
 }

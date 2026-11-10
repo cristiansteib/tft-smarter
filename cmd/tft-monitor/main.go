@@ -40,6 +40,29 @@ func cpuTimes() (idle, total uint64) {
 }
 
 // memPct returns RAM and swap usage in percent.
+// memBytes returns RAM in use and swap in use / total, in bytes.
+func memBytes() (ramUsed, swapUsed, swapTotal float64) {
+	var total, avail, swTotal, swFree float64
+	for _, l := range strings.Split(readFile("/proc/meminfo"), "\n") {
+		f := strings.Fields(l)
+		if len(f) < 2 {
+			continue
+		}
+		v, _ := strconv.ParseFloat(f[1], 64)
+		switch f[0] {
+		case "MemTotal:":
+			total = v
+		case "MemAvailable:":
+			avail = v
+		case "SwapTotal:":
+			swTotal = v
+		case "SwapFree:":
+			swFree = v
+		}
+	}
+	return (total - avail) * 1024, (swTotal - swFree) * 1024, swTotal * 1024
+}
+
 func memPct() (ram, swap int) {
 	var total, avail, swTotal, swFree float64
 	for _, l := range strings.Split(readFile("/proc/meminfo"), "\n") {
@@ -217,6 +240,8 @@ func run(port serial.Port, cpuT string) error {
 	var lastC []byte
 	var lastCT time.Time
 	snap := &snapshot{memTotal: memTotalBytes(), ncpu: runtime.NumCPU()}
+	var nh netHist
+	var avgDown, avgUp avgN
 	en := loadEnergy()
 	var uptime uint64
 	mkSum := func() []byte {
@@ -257,6 +282,9 @@ func run(port serial.Port, cpuT string) error {
 			line, err := r.ReadString('\n')
 			if err != nil {
 				return
+			}
+			if ev, ok := parseTouch(line); ok {
+				queueTouch(ev)
 			}
 			if os.Getenv("TFT_VERBOSE") != "" {
 				fmt.Print("board: ", line)
@@ -305,6 +333,10 @@ func run(port serial.Port, cpuT string) error {
 		rx, tx := netBytes()
 		down, up := int(float64(rx-rx0)/1024/dt), int(float64(tx-tx0)/1024/dt)
 		rx0, tx0 = rx, tx
+		nh.update(now, rx, tx, down, up)
+		snap.downAvg, snap.upAvg = int(avgDown.add(float64(down))), int(avgUp.add(float64(up)))
+		snap.netRx, snap.netTx, snap.down, snap.up = rx, tx, down, up
+		snap.netRxH, snap.netTxH, snap.peakDown, snap.peakUp = nh.hour(rx, tx)
 		temp := 0
 		if cpuT != "" {
 			t, _ := strconv.Atoi(strings.TrimSpace(readFile(cpuT)))
@@ -313,6 +345,7 @@ func run(port serial.Port, cpuT string) error {
 		upS, _, _ := strings.Cut(readFile("/proc/uptime"), ".")
 		uptime, _ = strconv.ParseUint(upS, 10, 32)
 		ram, swap := memPct()
+		snap.ramUsed, snap.swapUsed, snap.swapTotal = memBytes()
 		load := loadAvg()
 		snap.cpu, snap.ram, snap.swap, snap.cpuT = cpu, ram, swap, temp
 		snap.gpu, snap.gpuT, snap.vram, snap.load = gpu.util, gpu.temp, gpu.vram, load

@@ -2,9 +2,11 @@ import { Component, inject } from '@angular/core';
 import { Api } from './api';
 
 const INFO: Record<string, string> = {
-  dash: 'home screen: gauges + the four fullest disks', docker: 'full screen · only when a container is unhealthy',
-  system: 'full screen · only when pressure / NVMe / ping is off', top: 'full screen · busiest processes (≥10% CPU)',
-  rollcpu: 'full screen · CPU hogs + load scope (busy only)', rollmem: 'full screen · RAM hogs (busy only, rolls if long)',
+  dash: 'home: gauges, scope, network, disks and alerts', cpu: 'on demand · usage, temperature, load, top processes',
+  ram: 'on demand · RAM, swap, GPU memory, top processes', net: 'on demand · transfer since boot and last hour',
+  claude: 'on demand · context, 5-hour and weekly usage', docker: 'on demand · container health',
+  system: 'on demand · stalls, NVMe, ping, GPU power, swap', top: 'on demand · busiest processes',
+  rollcpu: 'comes up by itself when CPU is busy · hogs + load scope', rollmem: 'comes up by itself when RAM is busy · hogs',
 };
 
 @Component({
@@ -25,7 +27,7 @@ const INFO: Record<string, string> = {
               </li>
             }
           </ul>
-          <div class="row"><button (click)="api.next()">Next page ▶</button><button (click)="api.pin('')" [disabled]="!c.pin">Release pin</button></div>
+          <div class="row"><button (click)="api.prev()">◀ Previous page</button><button (click)="api.next()">Next page ▶</button><button (click)="api.pin('')" [disabled]="!c.pin">Release pin</button></div>
         </section>
         <section>
           <h2>Thresholds &amp; timing</h2>
@@ -49,7 +51,8 @@ export class PanelView {
     { key: 'hogMem', label: 'RAM hog threshold', unit: '% of RAM', min: 1, max: 50, step: 1, hint: 'a process is listed in the RAM credits above this' },
     { key: 'loadTrigger', label: 'Credits when load/core ≥', unit: '%', min: 20, max: 200, step: 5, hint: '1-minute load average per core' },
     { key: 'ramTrigger', label: 'RAM credits when used ≥', unit: '%', min: 50, max: 99, step: 1, hint: 'RAM in use' },
-    { key: 'dwellSec', label: 'Seconds per page', unit: ' s', min: 3, max: 60, step: 1, hint: 'rotation speed' },
+    { key: 'returnSec', label: 'Return home after', unit: ' s', min: 15, max: 600, step: 15, hint: 'a page you opened goes back home after this long without a touch' },
+    { key: 'dwellSec', label: 'Hog pages alternate every', unit: ' s', min: 10, max: 60, step: 1, hint: 'only when both CPU and RAM hogs are showing' },
     { key: 'creditStepMs', label: 'Credits roll speed', unit: ' ms/row', min: 400, max: 3000, step: 100, hint: 'lower is faster' },
   ];
   val(k: string): number { return (this.api.settings() as any)[k]; }
