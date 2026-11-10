@@ -95,12 +95,12 @@ func creditLines(name string, s *snapshot) (cell, []cell) {
 		for _, t := range hogsCPU(s) {
 			rows = append(rows, cell{0, pal(int(t.v), 50, 150) | sBar, byte(min(int(t.v), 100)), fmt.Sprintf("%s\t%.0f%%", short(t.name, 13), t.v)})
 		}
-		return cell{0, pCyan | sBig, 0, fmt.Sprintf("HOGGING CPU\tload %.1f", float64(s.load[0])/100)}, rows
+		return cell{0, pCyan | sBig, 0, fmt.Sprintf("Hogging CPU\tload %.1f", float64(s.load[0])/100)}, rows
 	}
 	for _, t := range hogsMem(s) {
 		rows = append(rows, cell{0, pMagenta | sBar, byte(min(t.v/s.memTotal*100*3, 100)), fmt.Sprintf("%s\t%s", short(t.name, 13), gb(t.v))})
 	}
-	return cell{0, pCyan | sBig, 0, fmt.Sprintf("HOGGING RAM\t%d%% used", s.ram)}, rows
+	return cell{0, pCyan | sBig, 0, fmt.Sprintf("Hogging RAM\t%d%% used", s.ram)}, rows
 }
 
 // Pages: "dash" (the gauges screen, band shows the disks) and "alerts" (band takeover) live on the dashboard;
@@ -393,7 +393,7 @@ func (p *panel) buildFull(name string, sub int, s *snapshot) []cell {
 			row(9, pal(s.ram, 60, 85)|sBar|sSwap, s.ram, fmt.Sprintf("%03d", min(s.swap, 100))+"RAM", fmt.Sprintf("%d%%", s.ram))
 		}
 	case "top":
-		cs = append(cs, cell{0, pCyan | sBig, 0, "BUSIEST\tcpu + ram"})
+		cs = append(cs, cell{0, pCyan | sBig, 0, "Busiest\tcpu and ram"})
 		for i, t := range s.top.cpu[:min(5, len(s.top.cpu))] {
 			row(i+1, pal(int(t.v), 50, 150)|sBar, int(t.v), short(t.name, 13), fmt.Sprintf("%.0f%%", t.v))
 		}
@@ -401,8 +401,8 @@ func (p *panel) buildFull(name string, sub int, s *snapshot) []cell {
 			row(6+i, pMagenta|sBar, int(t.v/s.memTotal*100*3), short(t.name, 13), gb(t.v))
 		}
 	case "system":
-		cs = append(cs, cell{0, pCyan | sBig, 0, "SYSTEM\thealth"})
-		for i, n := range []string{"STALL CPU", "STALL MEM", "STALL IO"} {
+		cs = append(cs, cell{0, pCyan | sBig, 0, "System\thealth"})
+		for i, n := range []string{"CPU stalls", "Memory stalls", "IO stalls"} {
 			v := int(s.psi[i] + 0.5)
 			row(i+1, pal(v, 20, 50)|sBar, v, n, fmt.Sprintf("%d%%", v))
 		}
@@ -412,14 +412,14 @@ func (p *panel) buildFull(name string, sub int, s *snapshot) []cell {
 		} else if s.nvmeT >= 70 {
 			nv = pOrange
 		}
-		row(4, nv|sBar, s.nvmeT, "NVME", fmt.Sprintf("%dC", s.nvmeT))
+		row(4, nv|sBar, s.nvmeT, "NVMe", fmt.Sprintf("%dC", s.nvmeT))
 		if s.latency < 0 {
-			row(5, pRed|sBar, 0, "PING", "FAIL")
+			row(5, pRed|sBar, 0, "Ping", "failed")
 		} else {
-			row(5, pal(s.latency, 50, 150)|sBar, s.latency, "PING", fmt.Sprintf("%dms", s.latency))
+			row(5, pal(s.latency, 50, 150)|sBar, s.latency, "Ping", fmt.Sprintf("%dms", s.latency))
 		}
-		row(6, pCyan|sBar, s.gpuW*100/max(s.gpuLimit, 1), "GPU POWER", fmt.Sprintf("%dW", s.gpuW))
-		row(7, pal(s.swap, 25, 60)|sBar, s.swap, "SWAP", fmt.Sprintf("%d%%", s.swap))
+		row(6, pCyan|sBar, s.gpuW*100/max(s.gpuLimit, 1), "GPU power", fmt.Sprintf("%dW", s.gpuW))
+		row(7, pal(s.swap, 25, 60)|sBar, s.swap, "Swap", fmt.Sprintf("%d%%", s.swap))
 	case "docker":
 		d := s.dock
 		bad := d.unhealthy + d.bad + d.restarting
@@ -427,10 +427,10 @@ func (p *panel) buildFull(name string, sub int, s *snapshot) []cell {
 		if bad > 0 {
 			col = pOrange
 		}
-		cs = append(cs, cell{0, col | sBig, 0, fmt.Sprintf("DOCKER\t%d/%d up", d.up, d.total)})
+		cs = append(cs, cell{0, col | sBig, 0, fmt.Sprintf("Docker\t%d/%d up", d.up, d.total)})
 		r := 1
 		for _, n := range d.badNames[:min(4, len(d.badNames))] {
-			row(r, pRed|sBright, 0, short(n, 22), "BAD")
+			row(r, pRed|sBright, 0, short(n, 22), "failing")
 			r++
 		}
 		for _, t := range d.top {

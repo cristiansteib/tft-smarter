@@ -1,8 +1,8 @@
 import { Component, computed, inject, input } from '@angular/core';
 import { Api, Cell, State } from './api';
 
-const PAL = ['#ffffff', '#9aa3ad', '#37d36b', '#f5d02e', '#ff9a2e', '#ff4d4d', '#2ee6e6', '#3d9bff', '#e04dff'];
-const DARK = '#262b33';
+const PAL = ['#eaf0f8', '#8a9bb4', '#27d6b4', '#ffb020', '#ff8a3d', '#ff5560', '#4fe6ff', '#4aa8ff', '#b48cff'];
+const DARK = '#1c2636';
 const SEGS = 30;
 
 interface Seg { d: string; on: boolean }
@@ -33,7 +33,7 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
           @for (r of rows(); track r.row) {
             <g [attr.transform]="'translate(0,' + (4 + r.row * 31) + ')'">
               <text x="14" [attr.y]="r.big ? 24 : 20" [attr.fill]="r.labelCol" [attr.font-size]="r.big ? 24 : 15">{{ r.label }}</text>
-              @if (r.big) { <rect x="14" y="27" width="452" height="1" fill="#262b33" /> }
+              @if (r.big) { <rect x="14" y="27" width="452" height="1" fill="#1c2636" /> }
               @if (r.bar) {
                 <rect x="170" y="3" width="220" height="20" fill="none" stroke="#9aa3ad" />
                 <rect x="171" y="4" [attr.width]="r.fill" height="18" [attr.fill]="r.col" />
@@ -51,11 +51,11 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
           }
           @if (st.panel.page === 'rollcpu') {
             <text x="26" y="170" fill="#9aa3ad" font-size="9">LOAD HISTORY</text>
-            <text x="98" y="170" fill="#2ee6e6" font-size="9">CPU</text><text x="122" y="170" fill="#e04dff" font-size="9">GPU</text>
-            <rect x="25" y="172" width="432" height="96" fill="none" stroke="#0a8a40" />
-            <line x1="26" y1="220" x2="456" y2="220" stroke="#0a8a40" />
-            <polyline [attr.points]="trace('gpu')" fill="none" stroke="#e04dff" stroke-width="2" />
-            <polyline [attr.points]="trace('cpu')" fill="none" stroke="#2ee6e6" stroke-width="2" />
+            <text x="98" y="170" fill="#4fe6ff" font-size="9">CPU</text><text x="122" y="170" fill="#b48cff" font-size="9">GPU</text>
+            <rect x="25" y="172" width="432" height="96" fill="none" stroke="#29384f" />
+            <line x1="26" y1="220" x2="456" y2="220" stroke="#29384f" />
+            <polyline [attr.points]="trace('gpu')" fill="none" stroke="#b48cff" stroke-width="2" />
+            <polyline [attr.points]="trace('cpu')" fill="none" stroke="#4fe6ff" stroke-width="2" />
           }
         } @else {
         <rect width="480" height="22" fill="#14181f" />
@@ -63,8 +63,8 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
         <text x="452" y="16" fill="#9aa3ad" font-size="13" text-anchor="end">{{ st.docker['up'] }}/{{ st.docker['total'] }} docker</text>
 
         @for (g of gauges(); track g.label) {
-          @for (sg of g.outer; track $index) { <path [attr.d]="sg.d" [attr.fill]="sg.on ? g.col : '${DARK}'" /> }
-          @for (sg of g.inner; track $index) { <path [attr.d]="sg.d" [attr.fill]="sg.on ? g.icol : '${DARK}'" /> }
+          @for (sg of g.outer; track $index) { <path [attr.d]="sg.d" [attr.fill]="sg.on ? g.col : '#1c2636'" /> }
+          @for (sg of g.inner; track $index) { <path [attr.d]="sg.d" [attr.fill]="sg.on ? g.icol : '#1c2636'" /> }
           @if (g.label === 'CPU') {
             <text [attr.x]="g.cx" [attr.y]="g.cy - 18" text-anchor="middle" [attr.fill]="g.loadCol" font-size="15">{{ load() }}</text>
           }
@@ -92,7 +92,7 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
       <div class="screen empty">waiting for the daemon…</div>
     }
   `,
-  styles: [`.screen { width: 100%; max-width: 720px; border-radius: 10px; border: 6px solid #2a2f38; background: #000; font-family: ui-monospace, monospace; display:block }
+  styles: [`.screen { width: 100%; max-width: 720px; border-radius: 10px; border: 6px solid #2a2f38; background: #000; font-family: system-ui, sans-serif; display:block }
     .empty { aspect-ratio: 3/2; display:grid; place-items:center; color:#9aa3ad }`],
 })
 export class TftScreen {
