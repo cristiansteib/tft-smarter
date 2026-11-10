@@ -401,7 +401,7 @@ static void bxEndDiff(uint8_t row) {
 // ---- latest stats ----
 struct Stats {
   uint8_t cpu, ram, swap, cpuT, gpu, gpuT, vram;
-  uint32_t down, up;          // KB/s
+  uint32_t down, up;          // network rates, kbit/s
   uint32_t uptime;
   uint16_t load[3];            // load averages x100
   uint8_t ncpu;
@@ -846,9 +846,12 @@ static void gaugeNotes() {
 }
 
 extern uint32_t shownD, shownU;   // 3 s averages of the network rates (see netTick)
-static void fmtRate(char *out, size_t n, uint32_t kbs) {
-  if (kbs >= 1024) snprintf(out, n, "%u.%u MB/s ", (unsigned)(kbs / 1024), (unsigned)((kbs % 1024) * 10 / 1024));
-  else snprintf(out, n, "%u KB/s   ", (unsigned)kbs);
+// Network rates are bits per second in SI units, like fast.com and speed tests. Same thresholds as fmtBits() in net.go.
+static void fmtRate(char *out, size_t n, uint32_t kbps) {
+  if (kbps < 1000) snprintf(out, n, "%u Kbps", (unsigned)kbps);
+  else if (kbps < 99950UL) { uint32_t t = (kbps + 50) / 100; snprintf(out, n, "%u.%u Mbps", (unsigned)(t / 10), (unsigned)(t % 10)); }
+  else if (kbps < 999500UL) snprintf(out, n, "%u Mbps", (unsigned)((kbps + 500) / 1000));
+  else { uint32_t g = (kbps + 5000) / 10000; snprintf(out, n, "%u.%02u Gbps", (unsigned)(g / 100), (unsigned)(g % 100)); }
 }
 
 static Span spUptime, spClock, spDocker, spClaude, spRate[2];
@@ -1005,16 +1008,16 @@ static void graphRepaint() {
 }
 
 // ---- network scope (Net page): download and upload rates, one sample per 3 s, autoscaled in steps ----
-static uint16_t nRawD[HIST], nRawU[HIST];      // KB/s / 2 (a gigabit link still fits in 16 bits)
+static uint32_t nRawD[HIST], nRawU[HIST];      // kbit/s
 static uint8_t nD[HIST], nU[HIST];             // the same, scaled 0..100 for the current full-scale step
 static uint8_t nPos, nScale;
 static uint16_t nTotal;
-static const uint32_t NSTEP[8] = {16, 64, 256, 1024, 4096, 16384, 65536, 262144};   // KB/s at the top of the chart
-static const char *const NLABEL[8] = {"16 KB/s", "64 KB/s", "256 KB/s", "1 MB/s", "4 MB/s", "16 MB/s", "64 MB/s", "256 MB/s"};
+static const uint32_t NSTEP[11] = {100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000};   // kbit/s at the top of the chart
+static const char *const NLABEL[11] = {"100 Kbps", "300 Kbps", "1 Mbps", "3 Mbps", "10 Mbps", "30 Mbps", "100 Mbps", "300 Mbps", "1 Gbps", "3 Gbps", "10 Gbps"};
 static const uint16_t ND_C[4] = {0xCFFE, GREEN, 0x1CD0, 0x1289};     // download: teal, head to tail
 static const uint16_t NU_C[4] = {0xFF16, ORANGE, 0xBB23, 0x5982};    // upload: orange
 
-static uint8_t netScaled(uint16_t raw) { uint32_t v = (uint32_t)raw * 2 * 100 / NSTEP[nScale]; return v > 100 ? 100 : v; }
+static uint8_t netScaled(uint32_t raw) { uint32_t v = raw * 100 / NSTEP[nScale]; return v > 100 ? 100 : v; }
 
 static void netCaption() {
   tft.fillRect(26, 160, 440, 11, BLACK);
@@ -1058,26 +1061,26 @@ static bool netVisible();   // defined with the page state
 // the numbers next to the chart are a 3 s average with a dead band, so they only change when the traffic really does
 static uint32_t rateD[12], rateU[12];
 static uint8_t rateI;
-uint32_t shownD, shownU;                        // what the text readouts show (KB/s)
+uint32_t shownD, shownU;                        // what the text readouts show (kbit/s)
 static void rateAvg() {
   rateD[rateI] = st.down; rateU[rateI] = st.up;
   if (++rateI >= 12) rateI = 0;
   uint32_t sd = 0, su = 0;
   for (uint8_t i = 0; i < 12; i++) { sd += rateD[i]; su += rateU[i]; }
   sd /= 12; su /= 12;
-  if ((sd > shownD ? sd - shownD : shownD - sd) * 12 > shownD + 24) shownD = sd;    // moved by more than ~8 % (or a couple of KB/s)
+  if ((sd > shownD ? sd - shownD : shownD - sd) * 12 > shownD + 24) shownD = sd;    // moved by more than ~8 % (or a couple of kbit/s)
   if ((su > shownU ? su - shownU : shownU - su) * 12 > shownU + 24) shownU = su;
 }
 
 // called on every stats frame: keeps the real-time history even while another screen is up
 static void netTick() {
   rateAvg();
-  nRawD[nPos] = min(st.down / 2, 65535UL); nRawU[nPos] = min(st.up / 2, 65535UL);   // one sample per frame: the chart is live
-  uint16_t mx = 1;                              // full scale = smallest step above the window's peak
+  nRawD[nPos] = st.down; nRawU[nPos] = st.up;   // one sample per frame: the chart is live
+  uint32_t mx = 1;                              // full scale = smallest step above the window's peak
   for (uint16_t i = 0; i < HIST; i++) { if (nRawD[i] > mx) mx = nRawD[i]; if (nRawU[i] > mx) mx = nRawU[i]; }
   uint8_t sc = 0;
-  while (sc < 7 && (uint32_t)mx * 2 > NSTEP[sc]) sc++;
-  if (sc < nScale && (uint32_t)mx * 2 * 10 > NSTEP[sc] * 7) sc = nScale;   // scale down only once the peak is well below the lower step
+  while (sc < 10 && mx > NSTEP[sc]) sc++;
+  if (sc < nScale && mx * 10 > NSTEP[sc] * 7) sc = nScale;   // scale down only once the peak is well below the lower step
   bool rescaled = sc != nScale;
   nScale = sc;
   if (rescaled) for (uint8_t i = 0; i < HIST; i++) { nD[i] = netScaled(nRawD[i]); nU[i] = netScaled(nRawU[i]); }
@@ -1302,7 +1305,8 @@ static void fmtWh(char *o, size_t n, uint32_t wh10) {
   else snprintf(o, n, "%lu Wh", wh);
 }
 static void fmtMB(char *o, size_t n, uint32_t mb) {
-  if (mb >= 1024) snprintf(o, n, "%lu.%lu GB", mb / 1024, (mb % 1024) * 10 / 1024);
+  if (mb >= 100000) snprintf(o, n, "%lu GB", mb / 1000);                        // decimal, three significant digits at most
+  else if (mb >= 1000) snprintf(o, n, "%lu.%lu GB", mb / 1000, (mb % 1000) / 100);
   else snprintf(o, n, "%lu MB", mb);
 }
 static void fmtHMS(char *o, size_t n, uint32_t s) { snprintf(o, n, "%02lu:%02lu:%02lu", (s / 3600) % 100, (s / 60) % 60, s % 60); }
@@ -1477,7 +1481,8 @@ static void ssTick() {
 
 // ---- binary protocol: 0xAA 0x55 | type | len | payload | crc8(type,len,payload) ----
 enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7, F_SCREEN = 8, F_LINE = 9, F_PAGE = 10, F_CMD = 11 };
-static bool menuDirty = false;    // the highlighted menu entry changed
+static bool menuDirty = false;    // the highlighted menu entry (or its pin) changed
+static bool menuPinned = false;   // the PC says the current page is pinned
 static void menuBar();
 static uint8_t menuSlot = 255;    // which menu entry the PC says is showing (255 = none)
 static bool doCal = false;        // the PC asked for a touch calibration
@@ -1515,8 +1520,9 @@ static void handleFrame(uint8_t type, const uint8_t *p, uint8_t len) {
     sumValid = true;
   } else if (type == F_BYE && len == 3) {
     byeReason = p[0]; offH = min((int)p[1], 23); offM = min((int)p[2], 59); byeGot = true;
-  } else if (type == F_PAGE && len == 1) {
-    if (menuSlot != p[0]) { menuSlot = p[0]; menuDirty = true; }
+  } else if (type == F_PAGE && (len == 1 || len == 2)) {
+    bool pin = len == 2 && p[1];
+    if (menuSlot != p[0] || menuPinned != pin) { menuSlot = p[0]; menuPinned = pin; menuDirty = true; }
   } else if (type == F_CMD && len == 1) {
     if (p[0] == 1) doCal = true;
   } else if (type == F_BAND || type == F_CELL || type == F_LINE || (type == F_SCREEN && len == 1)) {
@@ -1669,7 +1675,11 @@ static void menuBar() {
     int x0 = i * w;
     bool on = i == menuSlot;
     if (on) { tft.fillRect(x0 + 3, MENU_Y + 3, w - 6, H - MENU_Y - 5, DARK); tft.fillRect(x0 + 10, H - 3, w - 20, 2, GREEN); }
-    put(&FreeSans9pt7b, on ? WHITE : GREY, x0 + w / 2, MENU_Y + 15, MENU[i], 1);
+    put(&FreeSans9pt7b, on ? WHITE : GREY, x0 + w / 2 + (on && menuPinned ? 5 : 0), MENU_Y + 15, MENU[i], 1);
+    if (on && menuPinned) {                                // a pin: round head, needle down-left
+      tft.fillCircle(x0 + 9, MENU_Y + 8, 3, ORANGE);
+      tft.drawLine(x0 + 9, MENU_Y + 10, x0 + 6, MENU_Y + 16, ORANGE);
+    }
   }
 }
 

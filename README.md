@@ -20,10 +20,10 @@ The Mega drops any frame with a bad CRC and reports `ok=N bad=M` back every 5 s 
 The PC decides what the display shows; the Mega only draws what it is sent. Pages open **on demand** and go back home by themselves.
 
 - **Dashboard** (home): CPU/RAM/GPU gauges with load averages, temperatures, swap, VRAM and power, load history scope, network rates, a two-line band (the four fullest disks, or an alert) and the menu strip.
-- **CPU**: usage, temperature, load 1/5/15, load per core, top processes. **RAM**: RAM, swap, GPU memory, memory stalls, top processes. **Network**: transfer since boot and in the last hour, a live traffic scope (download/up, autoscaled from 16 KB/s to 256 MB/s) and the current rates. **Claude**: context window, 5-hour session with a live countdown to the reset, weekly usage and its reset, today's pace against budget, projected week, burn rate / chance of hitting the limit, open sessions, and the Claude logo. **System**, **Docker** and **Busiest** are there too.
+- **CPU**: usage, temperature, load 1/5/15, load per core, top processes. **RAM**: RAM, swap, GPU memory, memory stalls, top processes. **Network**: transfer since boot and in the last hour, a live traffic scope (download/upload, autoscaled from 100 Kbps to 10 Gbps) and the current rates. Rates are bits per second in SI units, shown in the most readable unit with at most three significant digits (`287 Kbps`, `12.3 Mbps`, `941 Mbps`, `1.00 Gbps`) — the same convention as fast.com and speed tests; byte totals are decimal (`104.1 GB`). **Claude**: context window, 5-hour session with a live countdown to the reset, weekly usage and its reset, today's pace against budget, projected week, burn rate / chance of hitting the limit, open sessions, and the Claude logo. **System**, **Docker** and **Busiest** are there too.
 - **Hogging CPU / RAM** come up by themselves when the machine is busy (load per core or RAM over the trigger and a process over its threshold), list only the real hogs, and go away once things calm down. The CPU one adds the load scope and RAM/swap bars. A page opened by hand stays at least 10 s.
 - Scopes are real time (one sample per 250 ms frame); every text readout is steadier: network rates are a 3 s average that only moves when the traffic moves by more than ~8 %, and a bar that shifts by one point is not retransmitted.
-- A page you open stays while you keep touching and returns home after *Return home after* (60 s) without a touch; hold a page (long press) to keep it up.
+- A page you open stays while you keep touching and returns home after *Return home after* (60 s) without a touch; pin a page to keep it up as long as you like (handy for watching the network).
 - Alerts (disk full, temperatures, memory/swap, load, unhealthy containers, no internet…) take over the dashboard band with hysteresis. Push your own message:
 
 ```
@@ -34,7 +34,7 @@ tft-monitor notify -sev warn -ttl 60 "build finished"     # sev: info|warn|crit
 
 The panel is a 4-wire resistive touchscreen (shield pins XP=8, XM=A2, YP=A3, YM=9, via Adafruit TouchScreen). On the first boot it asks for three taps (top-left, top-right, bottom-left) and stores the calibration in EEPROM. Hold a finger anywhere for 6 s to calibrate again, or use *Setup → Calibrate touch*.
 
-**Bottom menu**: a thin strip on every screen — Home, CPU, RAM, Net, Claude, System, Setup. Tap an entry to open it.
+**Bottom menu**: a thin strip on every screen — Home, CPU, RAM, Net, Claude, System, Setup. Tap an entry to open it. **Tap the highlighted entry (the page you are on) to pin that page**; a small pin appears on the tab (and `pin` in the title). Tap it again to release. Any screen can be pinned, including Home and Setup. Navigating somewhere else lets go of the pin, and double-tapping a gauge on the dashboard opens its page already pinned.
 
 | On the dashboard, tap… | Opens |
 | --- | --- |
@@ -50,7 +50,7 @@ The panel is a 4-wire resistive touchscreen (shield pins XP=8, XM=A2, YP=A3, YM=
 | --- | --- |
 | tap the title | back home |
 | swipe left / right | next / previous page |
-| hold ~1 s | keep this page up (title shows `pin`); hold again to release |
+| double-tap the body, or hold ~1 s | **pin** the page: it stays up (no return home, no alert takeover); do it again to let go |
 
 **Setup** is navigable by touch: swipe or tap *Next page* for its three sub-pages — *General* (return-home time, hog-page alternation, **Calibrate touch**, redraw), *Thresholds* (CPU hog %, load and RAM triggers, RAM hog %) and *Pages* (allow or hide individual pages). Tap a row to toggle it or run it; on `<  value  >` rows tap the left half of the value to decrease and the right half to increase. Tap the title to leave. Everything is saved immediately.
 

@@ -13,7 +13,8 @@ type touchEv struct {
 	kind byte // 't' tap, 'l' long press, 's' swipe
 	dir  byte // swipe: 'L' or 'R'
 	x, y int
-	page string // kind 'g': go to this page (from the control socket)
+	page string    // kind 'g': go to this page (from the control socket)
+	at   time.Time // when the event reached the daemon (double-tap timing)
 }
 
 var (
@@ -51,6 +52,7 @@ func parseTouch(line string) (touchEv, bool) {
 }
 
 func queueTouch(ev touchEv) {
+	ev.at = time.Now()
 	select {
 	case touchCh <- ev:
 	default: // never block the serial reader; a dropped tap is harmless
@@ -87,14 +89,30 @@ func (p *panel) step(dir int, s *snapshot, now time.Time) {
 // goTo opens a page on demand. It stays while you keep touching it and goes back home after ReturnSec without a
 // touch; with a page held (long press) the hold moves to it instead and nothing returns home.
 func (p *panel) goTo(name string, now time.Time) {
-	if name != "settings" && cfg().Pin != "" {
-		c := cfg()
-		c.Pin = name
+	if c := cfg(); c.Pin != "" && name != "settings" && name != c.Pin { // going somewhere else lets go of the pinned page
+		c.Pin = ""
 		setCfg(c)
-		p.manual = ""
-		return
 	}
 	p.manual, p.manualEnd = name, now.Add(returnHold())
+}
+
+// togglePin keeps the current page up (no return home, no alert takeover) or lets it go.
+func (p *panel) togglePin(now time.Time) {
+	cur := p.name
+	if p.manual != "" && now.Before(p.manualEnd) {
+		cur = p.manual // a page a tap just opened counts, even before the screen has switched
+	}
+	if cur == "" || cur == "alerts" { // alerts are a state of the dashboard, not a page: pin the dashboard instead
+		return
+	}
+	c := cfg()
+	if c.Pin == cur {
+		c.Pin = ""
+	} else {
+		c.Pin = cur
+	}
+	setCfg(c)
+	p.manual = ""
 }
 
 // handleTouch turns a gesture into a page change. The screen is 480x320: header on top, gauges, scope and
@@ -112,7 +130,16 @@ func (p *panel) handleTouch(ev touchEv, s *snapshot, now time.Time) {
 		return
 	case 'm': // bottom menu: Home CPU RAM Net Claude System Setup
 		targets := [...]string{"dash", "cpu", "ram", "net", "claude", "system", "settings"}
-		if ev.x >= 0 && ev.x < len(targets) {
+		if ev.x < 0 || ev.x >= len(targets) {
+			return
+		}
+		cur := p.name
+		if p.manual != "" && now.Before(p.manualEnd) {
+			cur = p.manual
+		}
+		if targets[ev.x] == cur { // tapping the tab you are on pins the page (works on every screen), tap again to let go
+			p.togglePin(now)
+		} else {
 			p.goTo(targets[ev.x], now)
 		}
 		return
@@ -137,19 +164,13 @@ func (p *panel) handleTouch(ev touchEv, s *snapshot, now time.Time) {
 		} else {
 			p.step(-1, s, now)
 		}
-	case 'l': // hold: keep this page up (title shows "pin"), or release it
-		if p.name == "" || p.name == "alerts" {
+	case 'l': // hold: same as a double tap
+		p.togglePin(now)
+	case 't':
+		if p.isDoubleTap(ev) { // two quick taps in the body of a page: pin it, or let it go
+			p.togglePin(now)
 			return
 		}
-		c := cfg()
-		if c.Pin == p.name {
-			c.Pin = ""
-		} else {
-			c.Pin = p.name
-		}
-		setCfg(c)
-		p.manual = ""
-	case 't':
 		if p.full {
 			if ev.y < 36 { // title: back home
 				p.goTo("dash", now)
@@ -175,4 +196,21 @@ func (p *panel) handleTouch(ev touchEv, s *snapshot, now time.Time) {
 			p.goTo("top", now)
 		}
 	}
+}
+
+// isDoubleTap reports whether this tap is the second of a quick pair in the body of the screen (not the title or
+// the menu strip). The first tap has already done its normal job, e.g. opened the page you double-tapped a gauge for.
+func (p *panel) isDoubleTap(ev touchEv) bool {
+	body := ev.y >= 36 && ev.y < 300
+	prev := p.lastTap
+	p.lastTap = ev
+	if !body || prev.kind != 't' || prev.y < 36 || prev.y >= 300 {
+		return false
+	}
+	dx, dy := ev.x-prev.x, ev.y-prev.y
+	if ev.at.Sub(prev.at) > 450*time.Millisecond || dx*dx+dy*dy > 50*50 {
+		return false
+	}
+	p.lastTap = touchEv{} // a third tap starts over
+	return true
 }

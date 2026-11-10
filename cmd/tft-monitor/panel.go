@@ -25,6 +25,7 @@ type panel struct {
 	repaint   bool      // force the board to repaint the current screen (the menu was drawn over it)
 	resend    bool      // the board repainted itself: send every cell again
 	lastView  string    // last real page shown, where Settings returns to
+	lastTap   touchEv   // the previous tap, for double-tap detection
 	sentSlot  int       // last menu slot sent to the board (-1 = none yet)
 }
 
@@ -328,7 +329,7 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 	if p.manual != "" && now.Before(p.manualEnd) { // a page chosen by touch (or the settings) wins over the pin for a while
 		pin, override = p.manual, true
 	}
-	if pin != "" && (override || !(take && len(list) > 0)) {
+	if pin != "" && (override || isFull(pin) || !(take && len(list) > 0)) { // a pinned full page stays even when an alert fires
 		name = pin // pinned from the UI: hold this page (its own screens still roll); alerts still win
 		if p.name == pin {
 			sub = p.sub
@@ -383,7 +384,7 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		p.lastFull = now
 	} else if now.Sub(p.lastFull) >= 10*time.Second {
 		p.shown = map[byte]cell{}
-		p.pending = append([][]byte{screenFrame(screenMode(p.name, false)), pageFrame(menuSlot(p.name))}, p.pending...) // self-heal if the Mega missed the switch
+		p.pending = append([][]byte{screenFrame(screenMode(p.name, false)), pageFrame(menuSlot(p.name), cfg().Pin == p.name)}, p.pending...) // self-heal if the Mega missed the switch
 		p.lastFull = now
 	}
 	if name != "settings" && name != "alerts" && name != "" {
@@ -403,9 +404,10 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		p.shown, p.pending = map[byte]cell{}, nil
 		p.lastBand, p.lastFull = [4]int{-1}, now
 	}
-	if slot := int(menuSlot(name)); slot != p.sentSlot {
+	pinned := cfg().Pin == name && name != ""
+	if slot := int(menuSlot(name)) | b2i(pinned)<<8; slot != p.sentSlot {
 		p.sentSlot = slot
-		p.pending = append(p.pending, pageFrame(byte(slot)))
+		p.pending = append(p.pending, pageFrame(menuSlot(name), pinned))
 	}
 	idx := 0
 	for i, n := range names {
@@ -565,7 +567,7 @@ func (p *panel) buildFull(name string, sub int, s *snapshot) []cell {
 		row(2, pOrange, 0, "Uploaded", fmtBytes(s.netTx))
 		row(3, pGreen, 0, "Down last hour", fmtBytes(s.netRxH))
 		row(4, pOrange, 0, "Up last hour", fmtBytes(s.netTxH))
-		row(8, pWhite, 0, "Right now", fmtKBs(s.downAvg)+" down  "+fmtKBs(s.upAvg)+" up")
+		row(8, pWhite, 0, "Now", fmtBits(s.downAvg)+" down  "+fmtBits(s.upAvg)+" up")
 	case "top":
 		cs = append(cs, cell{0, pCyan | sBig, 0, "Busiest\tcpu and ram"})
 		for i, t := range s.top.cpu[:min(5, len(s.top.cpu))] {

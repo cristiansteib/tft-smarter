@@ -24,7 +24,7 @@ import { TftScreen } from './tft-screen';
           <div class="kv">
             <span>Load 1/5/15</span><b>{{ s.gauges.load[0].toFixed(2) }} / {{ s.gauges.load[1].toFixed(2) }} / {{ s.gauges.load[2].toFixed(2) }}</b>
             <span>Per core</span><b>{{ perCore() }}% of {{ s.gauges.ncpu }} threads</b>
-            <span>Net</span><b>↓ {{ s.gauges.down }} KB/s · ↑ {{ s.gauges.up }} KB/s</b>
+            <span>Net</span><b>↓ {{ bits(s.gauges.down) }} · ↑ {{ bits(s.gauges.up) }}</b>
             <span>GPU power</span><b>{{ s.gauges.gpuW }} / {{ s.gauges.gpuLimit }} W</b>
             <span>NVMe</span><b>{{ s.gauges.nvmeT }} °C</b>
             <span>Ping</span><b>{{ s.gauges.latency < 0 ? 'FAIL' : s.gauges.latency + ' ms' }}</b>
@@ -57,5 +57,13 @@ export class LiveView {
     const g = this.st()?.gauges;
     return g ? Math.round((g.load[0] * 100) / Math.max(g.ncpu, 1)) : 0;
   });
+  /** kbit/s -> Kbps / Mbps / Gbps with at most three significant digits (same rule as the board) */
+  bits(k: number): string {
+    if (k < 1000) return `${k} Kbps`;
+    if (k < 99950) { const t = Math.floor((k + 50) / 100); return `${Math.floor(t / 10)}.${t % 10} Mbps`; }
+    if (k < 999500) return `${Math.floor((k + 500) / 1000)} Mbps`;
+    const g = Math.floor((k + 5000) / 10000);
+    return `${Math.floor(g / 100)}.${String(g % 100).padStart(2, '0')} Gbps`;
+  }
   gb(b: number) { return b >= 2 ** 30 ? (b / 2 ** 30).toFixed(1) + ' G' : (b / 2 ** 20).toFixed(0) + ' M'; }
 }

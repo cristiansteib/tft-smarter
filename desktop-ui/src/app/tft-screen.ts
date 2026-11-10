@@ -106,12 +106,12 @@ export class TftScreen {
   s = input.required<State | null>();
   private api = inject(Api);
 
-  /** download / upload trace, scaled to the window's peak like the board does (steps of 4x from 16 KB/s) */
+  /** download / upload trace, scaled to the window's peak like the board does (1-3-10 steps from 100 kbit/s) */
   netTrace(k: 'down' | 'up') {
     const h = this.api.history();
     const peak = Math.max(1, ...h.map((x) => Math.max(x.down, x.up)));
-    let step = 16;
-    while (step < peak && step < 262144) step *= 4;
+    const steps = [100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000];
+    const step = steps.find((s) => s >= peak) ?? 10000000;
     return h.map((x, i) => `${26 + i * 5},${244 - (x[k] * 70) / step}`).join(' ');
   }
 

@@ -158,5 +158,11 @@ func (p *panel) touchSettings(x, y int, now time.Time) {
 
 func (p *panel) leaveSettings(now time.Time) {
 	p.manual = ""
-	p.goTo("dash", now)
+	if c := cfg(); c.Pin == "settings" { // the pinned page is the settings themselves: leaving lets go of it
+		c.Pin = ""
+		setCfg(c)
+	}
+	if cfg().Pin == "" {
+		p.goTo("dash", now) // a pinned page is still there underneath: just uncover it
+	}
 }

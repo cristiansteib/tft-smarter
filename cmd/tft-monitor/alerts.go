@@ -42,8 +42,8 @@ type snapshot struct {
 	ramUsed, swapUsed, swapTotal          float64 // bytes
 	netRx, netTx                          uint64  // bytes since boot
 	netRxH, netTxH                        uint64  // bytes in the last hour
-	down, up, peakDown, peakUp            int     // KB/s now, and the hour's peaks
-	downAvg, upAvg                        int     // KB/s, 3 s average with a dead band (for text readouts)
+	down, up, peakDown, peakUp            int     // kbit/s now, and the hour's peaks
+	downAvg, upAvg                        int     // kbit/s, 3 s average with a dead band (for text readouts)
 }
 
 // engine evaluates alert rules with hysteresis and decides when alerts take over the info panel.

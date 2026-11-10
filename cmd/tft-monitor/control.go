@@ -108,7 +108,7 @@ type stateDoc struct {
 		GPULimit int        `json:"gpuLimit"`
 		NVMeT    int        `json:"nvmeT"`
 		Latency  int        `json:"latency"`
-		Down     int        `json:"down"` // KB/s
+		Down     int        `json:"down"` // kbit/s
 		Up       int        `json:"up"`
 		Uptime   uint32     `json:"uptime"`
 		Load     [3]float64 `json:"load"`

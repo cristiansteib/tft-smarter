@@ -101,13 +101,30 @@ func loadAvg() (l [3]int) {
 	return
 }
 
+// physicalNIC reports whether an interface is a real network card (it has a backing device). Loopback, bridges,
+// veth pairs, tunnels and VPN interfaces do not, and counting them would double-count traffic that also crosses a card.
+var nicCache = map[string]bool{}
+
+func physicalNIC(name string) bool {
+	if v, ok := nicCache[name]; ok {
+		return v
+	}
+	_, err := os.Stat("/sys/class/net/" + name + "/device")
+	v := err == nil
+	if _, e2 := os.Stat("/sys/class/net"); e2 != nil { // no sysfs: fall back to a name filter
+		v = !(name == "lo" || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "veth") || strings.HasPrefix(name, "docker") ||
+			strings.HasPrefix(name, "zcc") || strings.HasPrefix(name, "tun") || strings.HasPrefix(name, "wg") || strings.HasPrefix(name, "tailscale"))
+	}
+	nicCache[name] = v
+	return v
+}
+
 func netBytes() (rx, tx uint64) {
 	lines := strings.Split(readFile("/proc/net/dev"), "\n")
 	for _, l := range lines[min(2, len(lines)):] {
 		name, data, ok := strings.Cut(l, ":")
 		name = strings.TrimSpace(name)
-		if !ok || name == "lo" || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "veth") ||
-			strings.HasPrefix(name, "docker") || strings.HasPrefix(name, "zcc") {
+		if !ok || !physicalNIC(name) {
 			continue
 		}
 		f := strings.Fields(data)
@@ -234,6 +251,7 @@ var (
 func run(port serial.Port, cpuT string) error {
 	idle0, tot0 := cpuTimes()
 	rx0, tx0 := netBytes()
+	tNet := time.Now() // when rx0/tx0 were read: the rate is bytes between two reads over the time between those same reads
 	t0 := time.Now()
 	gpu := queryGPU()
 	var eCPU, eCPUT, eGPU, eGPUT, eGPUW ema
@@ -250,7 +268,7 @@ func run(port serial.Port, cpuT string) error {
 		if len(snap.disks) > 0 {
 			d = snap.disks[0].pct
 		}
-		return summaryFrame(uint32(uptime), uint32(en.Wh*10+0.5), [5]int{en.PeakCPU, en.PeakGPU, en.PeakCT, en.PeakGT, en.avgCPU()}, rx>>20, tx>>20, d)
+		return summaryFrame(uint32(uptime), uint32(en.Wh*10+0.5), [5]int{en.PeakCPU, en.PeakGPU, en.PeakCT, en.PeakGT, en.avgCPU()}, rx/1_000_000, tx/1_000_000, d) // decimal MB
 	}
 	pan.name, pan.shown, pan.pending = "", map[byte]cell{}, nil
 	send := func(b []byte) error {
@@ -331,8 +349,10 @@ func run(port serial.Port, cpuT string) error {
 		snap.pcW, snap.whBoot = int(en.pcW+0.5), en.Wh
 		cpu = eCPU.add(float64(cpu), 0.5)
 		rx, tx := netBytes()
-		down, up := int(float64(rx-rx0)/1024/dt), int(float64(tx-tx0)/1024/dt)
-		rx0, tx0 = rx, tx
+		tn := time.Now()
+		dtn := max(tn.Sub(tNet).Seconds(), 0.05)
+		down, up := int(float64(rx-rx0)*8/1000/dtn), int(float64(tx-tx0)*8/1000/dtn) // kbit/s (SI: 1 kbit = 1000 bit)
+		rx0, tx0, tNet = rx, tx, tn
 		nh.update(now, rx, tx, down, up)
 		snap.downAvg, snap.upAvg = int(avgDown.add(float64(down))), int(avgUp.add(float64(up)))
 		snap.netRx, snap.netTx, snap.down, snap.up = rx, tx, down, up
