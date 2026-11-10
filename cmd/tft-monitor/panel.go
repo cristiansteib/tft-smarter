@@ -538,28 +538,34 @@ func (p *panel) buildFull(name string, sub int, s *snapshot) []cell {
 			row(3, cc, 0, "Session resets in", clock(left))
 		}
 		v, t = pct(c.wk)
-		row(4, pal(v, 60, 80)|sBar, v, "Weekly", t)
-		if c.weeklyResetAt.IsZero() {
+		row(4, pal(v, 60, 80)|sBar, v, "Weekly used", t)
+		o := weeklyOutlook(c, time.Now())
+		if !o.ok {
 			row(5, pGrey, 0, "Week resets in", "--")
 		} else {
-			row(5, pWhite, 0, "Week resets in", longLeft(time.Until(c.weeklyResetAt)))
-		}
-		if c.wk >= 0 {
-			pc, txt := byte(pGreen), fmt.Sprintf("%.0f%% under", -c.pace)
-			if c.pace > 0 {
-				pc, txt = pal(int(c.pace), 10, 25), fmt.Sprintf("%.0f%% over", c.pace)
+			row(5, pWhite, 0, "Week resets in", fmt.Sprintf("%s, %.0f%% left", longLeft(o.remaining), o.left))
+			// what the week still allows, against what you have been using
+			if o.early {
+				row(6, pWhite, 0, "Can burn per day", fmt.Sprintf("%.0f%%", o.allowedPerDay))
+			} else {
+				row(6, pWhite, 0, "Can burn per day", fmt.Sprintf("%.0f%% (now %.0f%%)", o.allowedPerDay, o.usedPerDay))
 			}
-			row(6, pc, 0, "Today's pace", txt)
-			pv, pt := pct(c.projWeekly)
-			row(7, pal(pv, 80, 100)|sBar, pv, "Projected", pt)
+			if o.early { // too little of the week has passed for a meaningful projection
+				row(7, pGrey, 0, "At your pace", "too early")
+			} else {
+				row(7, pal(int(o.proj), 80, 100)|sBar, int(o.proj), "At your pace", fmt.Sprintf("%.0f%%", o.proj))
+				switch {
+				case o.limitIn > 0 && o.limitIn < o.remaining: // the limit comes before the reset
+					row(8, pRed, 0, "Outlook", "limit in "+longLeft(o.limitIn))
+				case o.proj >= 85:
+					row(8, pYellow, 0, "Outlook", fmt.Sprintf("tight, %.0f%% spare", 100-o.proj))
+				default:
+					row(8, pGreen, 0, "Outlook", fmt.Sprintf("on track, %.0f%% spare", 100-o.proj))
+				}
+			}
 		}
-		switch {
-		case !c.fetchedAt.IsZero() && time.Since(c.fetchedAt) > 15*time.Minute:
+		if !c.fetchedAt.IsZero() && time.Since(c.fetchedAt) > 15*time.Minute { // stale numbers are worth a warning more than a forecast
 			row(8, pOrange, 0, "Usage data", fmt.Sprintf("%dm old", int(time.Since(c.fetchedAt).Minutes())))
-		case c.pOver >= 0.01:
-			row(8, pal(int(c.pOver*100), 10, 40), 0, "Chance of the limit", fmt.Sprintf("%.0f%%", c.pOver*100))
-		case c.rate > 0:
-			row(8, pGrey, 0, "Burn rate", fmt.Sprintf("%.1f%%/h", c.rate))
 		}
 	case "net": // rows on top, the traffic scope in the middle (drawn by the board), the live rates at the bottom
 		cs = append(cs, cell{0, pCyan | sBig, 0, "Network\tsince boot"})
@@ -660,4 +666,41 @@ func longLeft(d time.Duration) string {
 func similar(a, b cell) bool {
 	d := int(a.pct) - int(b.pct)
 	return a.slot == b.slot && a.style == b.style && a.text == b.text && d >= -1 && d <= 1
+}
+
+// outlook is the weekly picture: what is left, what the week still allows per day, where the current pace ends up
+// at the reset, and whether the limit would be reached before it.
+type outlook struct {
+	ok, early     bool
+	remaining     time.Duration
+	left          float64 // % of the weekly limit still available
+	allowedPerDay float64 // % per day you could burn from now and just reach the limit at the reset
+	usedPerDay    float64 // % per day you have averaged so far this week
+	proj          float64 // % of the limit reached at the reset if you keep that average
+	limitIn       time.Duration
+}
+
+func weeklyOutlook(c claudeInfo, now time.Time) outlook {
+	const week = 7 * 24 * time.Hour
+	if c.wk < 0 || c.weeklyResetAt.IsZero() {
+		return outlook{}
+	}
+	rem := c.weeklyResetAt.Sub(now)
+	if rem <= 0 || rem > week {
+		return outlook{}
+	}
+	o := outlook{ok: true, remaining: rem, left: max(0, 100-float64(c.wk))}
+	o.allowedPerDay = o.left / (rem.Hours() / 24)
+	elapsed := week - rem
+	o.usedPerDay = float64(c.wk) / (elapsed.Hours() / 24)
+	if elapsed < 6*time.Hour {
+		o.early = true
+		return o
+	}
+	perHour := float64(c.wk) / elapsed.Hours()
+	o.proj = float64(c.wk) + perHour*rem.Hours()
+	if perHour > 0 {
+		o.limitIn = time.Duration(o.left / perHour * float64(time.Hour))
+	}
+	return o
 }
