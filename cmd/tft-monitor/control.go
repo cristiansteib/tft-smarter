@@ -26,7 +26,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{HogCPU: 40, HogMem: 8, LoadTrigger: 60, RamTrigger: 80, CreditStepMs: 1400, DwellSec: 9, Disabled: map[string]bool{}}
+	return settings{HogCPU: 40, HogMem: 8, LoadTrigger: 60, RamTrigger: 80, CreditStepMs: 1400, DwellSec: 12, Disabled: map[string]bool{}}
 }
 
 var (

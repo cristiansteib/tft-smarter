@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <MCUFRIEND_kbv.h>
 
+#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
@@ -24,6 +26,16 @@ MCUFRIEND_kbv tft;
 #define TEMP_OK 0x4D5F   // sky     #4AA8FF  temperature rings
 
 static int W, H;
+
+// GFX fonts do not paint a background: clear the area first, measure with textW to align
+static uint16_t textW(const char *t) { int16_t x, y; uint16_t w, h; tft.getTextBounds(t, 0, 0, &x, &y, &w, &h); return w; }
+// print with a font at a baseline; align 0 = left at x, 1 = centred on x, 2 = right edge at x
+static void put(const GFXfont *f, uint16_t col, int x, int base, const char *t, uint8_t align = 0) {
+  tft.setFont(f); tft.setTextSize(1); tft.setTextColor(col);
+  if (align) x -= align == 1 ? textW(t) / 2 : textW(t);
+  tft.setCursor(x, base); tft.print(t);
+  tft.setFont();
+}
 
 // ---- latest stats ----
 struct Stats {
@@ -75,8 +87,8 @@ static void segment(const Gauge &g, int i, uint16_t c) {
 static void gaugeFrame(Gauge &g) {
   for (int i = 0; i < SEGS; i++) segment(g, i, DARK);
   if (g.label) {
-    tft.setTextSize(2); tft.setTextColor(GREY);
-    tft.setCursor(g.cx - 18, g.cy + 50); tft.print(g.label);
+    tft.fillRect(g.cx - 30, g.cy + 48, 60, 20, BLACK);
+    put(&FreeSansBold9pt7b, GREY, g.cx, g.cy + 63, g.label, 1);
   }
   g.lit = 0; g.col = 0; g.val = 255;
 }
@@ -157,21 +169,17 @@ static void drawCell(const uint8_t *p, uint8_t len) {   // slot | style | pct | 
   if (val) *val++ = 0;
   int x0 = PX + (slot & 1) * 224, y0 = PY + (slot >> 1) * 28, w = wide ? 446 : 222;
   uint16_t col = PAL[min(style & 15, 8)];
-  uint8_t sz = big ? 3 : 2;
-  int ty = big ? y0 + 2 : y0 + 6;
+  int base = big ? y0 + 23 : y0 + 20;
   tft.fillRect(x0, y0, w, 27, BLACK);
-  tft.setTextSize(sz);
-  tft.setTextColor((bright || big) ? col : bar ? WHITE : GREY, BLACK);
-  tft.setCursor(x0, ty); tft.print(txt);
+  put(big ? &FreeSansBold18pt7b : &FreeSans12pt7b, (bright || big) ? col : bar ? WHITE : GREY, x0, base, txt);
   if (!val) return;
-  tft.setTextColor(col, BLACK);
   if (bar) {
-    int bx = x0 + (wide ? 96 : 76), bw = wide ? 230 : 68, fill = (long)(bw - 2) * min((int)pct, 100) / 100;
-    tft.drawRect(bx, y0 + 4, bw, 19, GREY);
-    tft.fillRect(bx + 1, y0 + 5, fill, 17, col);
-    tft.setCursor(bx + bw + 5, ty); tft.print(val);
+    int bx = x0 + (wide ? 96 : 88), bw = wide ? 230 : 56, fill = (long)(bw - 4) * min((int)pct, 100) / 100;
+    tft.fillRect(bx, y0 + 8, bw, 11, DARK);                  // quiet track, no outline
+    if (fill > 0) tft.fillRect(bx + 2, y0 + 10, fill, 7, col);
+    put(&FreeSansBold9pt7b, col, bx + bw + 6, y0 + 19, val);
   } else {
-    tft.setCursor(x0 + w - (int)strlen(val) * 6 * sz, ty); tft.print(val);
+    put(big ? &FreeSansBold12pt7b : &FreeSansBold9pt7b, col, x0 + w, big ? base : y0 + 19, val, 2);
   }
 }
 
@@ -180,9 +188,6 @@ static void drawCell(const uint8_t *p, uint8_t len) {   // slot | style | pct | 
 static bool pageMode = false, pageScope = false;
 static uint16_t lineHash[10];
 #define LROW 31
-
-// right-aligned / measured text with a GFX font (those fonts do not paint a background)
-static uint16_t textW(const char *t) { int16_t x, y; uint16_t w, h; tft.getTextBounds(t, 0, 0, &x, &y, &w, &h); return w; }
 
 static void drawLine(const uint8_t *p, uint8_t len) {
   if (len < 3 || p[0] > 9) return;
@@ -279,51 +284,49 @@ static void gaugeNotes() {
   gaugeUpdate(T[2], st.swap, st.swap);
   uint8_t wp = st.gpuLim ? min(100UL, (unsigned long)st.gpuW * 100 / st.gpuLim) : 0;
   gaugeUpdate(T[3], wp, wp);
-  tft.setTextSize(2);
-  snprintf(b, sizeof b, "%3dC", st.cpuT);
-  tft.setTextColor(tempColor(st.cpuT, 60), BLACK);
-  tft.setCursor(G[0].cx - 24, G[0].cy + 16); tft.print(b);
-  snprintf(b, sizeof b, "%3dC", st.gpuT);
-  tft.setTextColor(tempColor(st.gpuT, 65), BLACK);
-  tft.setCursor(G[2].cx - 24, G[2].cy + 16); tft.print(b);
-  snprintf(b, sizeof b, "S%2d%%", st.swap);
-  tft.setTextColor(st.swap >= 60 ? RED : st.swap >= 25 ? ORANGE : SWAP_OK, BLACK);
-  tft.setCursor(G[1].cx - 24, G[1].cy + 16); tft.print(b);
+  const int ty = 28;                                         // baseline below the % inside the ring
+  snprintf(b, sizeof b, "%dC", st.cpuT);
+  tft.fillRect(G[0].cx - 30, G[0].cy + 15, 60, 17, BLACK);
+  put(&FreeSans9pt7b, tempColor(st.cpuT, 60), G[0].cx, G[0].cy + ty, b, 1);
+  snprintf(b, sizeof b, "%dC", st.gpuT);
+  tft.fillRect(G[2].cx - 30, G[2].cy + 15, 60, 17, BLACK);
+  put(&FreeSans9pt7b, tempColor(st.gpuT, 65), G[2].cx, G[2].cy + ty, b, 1);
+  snprintf(b, sizeof b, "sw %d%%", st.swap);
+  tft.fillRect(G[1].cx - 30, G[1].cy + 15, 60, 17, BLACK);
+  put(&FreeSans9pt7b, st.swap >= 60 ? RED : st.swap >= 25 ? ORANGE : SWAP_OK, G[1].cx, G[1].cy + ty, b, 1);
   if (memcmp(lastLoad, st.load, sizeof lastLoad)) {   // 1 and 5 min load inside the CPU gauge, above the %
     memcpy(lastLoad, st.load, sizeof lastLoad);
     uint32_t per = (uint32_t)st.load[0] * 100 / st.ncpu;   // 1-min load per core, percent
     uint16_t col = per >= 100 ? RED : per >= 60 ? ORANGE : GREY;
-    int cx = G[0].cx, y = G[0].cy - 32;
-    tft.fillRect(cx - 32, G[0].cy - 36, 64, 22, BLACK);
-    uint16_t t[2];                                      // tenths, rounded
-    char ip[2][6];
-    int w = 0;
+    int cx = G[0].cx, base = G[0].cy - 19;
+    tft.fillRect(cx - 34, G[0].cy - 38, 68, 24, BLACK);
+    char ip[2][6], dp[2][4];
+    int wi[2], wd[2], w = 10;                             // 10 px gap between the two values
     for (int i = 0; i < 2; i++) {
-      t[i] = (st.load[i] + 5) / 10;
-      snprintf(ip[i], sizeof ip[i], "%u", t[i] / 10);
-      w += strlen(ip[i]) * 12 + (t[i] < 100 ? 12 : 0);   // big int (12 px/digit) + small ".d" (12 px)
+      uint16_t t = (st.load[i] + 5) / 10;                 // tenths, rounded
+      snprintf(ip[i], sizeof ip[i], "%u", t / 10);
+      snprintf(dp[i], sizeof dp[i], t < 100 ? ".%u" : "", t % 10);   // decimal only while there is room
+      tft.setFont(&FreeSansBold12pt7b); wi[i] = textW(ip[i]);
+      tft.setFont(&FreeSans9pt7b); wd[i] = textW(dp[i]); tft.setFont();
+      w += wi[i] + wd[i];
     }
-    w += 6;                                             // gap between the two values
     int x = cx - w / 2;
-    tft.setTextColor(col, BLACK);
     for (int i = 0; i < 2; i++) {
-      tft.setTextSize(2); tft.setCursor(x, y); tft.print(ip[i]);
-      x += strlen(ip[i]) * 12;
-      if (t[i] < 100) {                                 // decimal only while there is room
-        tft.setTextSize(1); tft.setCursor(x, y + 7); tft.print('.'); tft.print(t[i] % 10);
-        x += 12;
-      }
-      x += 6;
+      put(&FreeSansBold12pt7b, col, x, base, ip[i]); x += wi[i];
+      put(&FreeSans9pt7b, col, x, base, dp[i]); x += wd[i] + 10;
     }
   }
   if (st.vram != lastVram || st.gpuW != lastW) {
     lastVram = st.vram; lastW = st.gpuW;
-    snprintf(b, sizeof b, "VRAM %d%% ", st.vram);
-    tft.setTextSize(1); tft.setTextColor(levelColor(st.vram, 70, 90), BLACK);
-    tft.setCursor(G[2].cx - 45, G[2].cy + 70); tft.print(b);
-    snprintf(b, sizeof b, "%3uW", st.gpuW);
-    tft.setTextColor(wp >= 98 ? RED : wp >= 85 ? ORANGE : POWER_OK, BLACK);
-    tft.setCursor(G[2].cx + 21, G[2].cy + 70); tft.print(b);
+    tft.fillRect(G[2].cx - 66, G[2].cy + 66, 132, 16, BLACK);
+    char v[12], wt[8];
+    snprintf(v, sizeof v, "VRAM %d%%", st.vram);
+    snprintf(wt, sizeof wt, "%uW", st.gpuW);
+    tft.setFont(&FreeSans9pt7b); int total = textW(v) + 8 + textW(wt); tft.setFont();
+    int x0 = G[2].cx - total / 2 + 8;                         // nudged right: keep clear of the divider at x=318
+    put(&FreeSans9pt7b, levelColor(st.vram, 70, 90), x0, G[2].cy + 78, v);
+    tft.setFont(&FreeSans9pt7b); int vw = textW(v); tft.setFont();
+    put(&FreeSans9pt7b, wp >= 98 ? RED : wp >= 85 ? ORANGE : POWER_OK, x0 + vw + 8, G[2].cy + 78, wt);
   }
 }
 
@@ -337,8 +340,7 @@ static char lastClock[8], lastUp[16];
 static void drawHeader() {  // full redraw (on state change)
   tft.fillRect(0, 0, W, 22, PANEL);
   if (!online) {
-    tft.setTextSize(2); tft.setTextColor(RED, PANEL);
-    tft.setCursor(28, 4); tft.print(F("NO DATA - start tft-monitor"));
+    put(&FreeSansBold9pt7b, RED, 28, 16, "No data - start tft-monitor");
   }
   lastClock[0] = lastUp[0] = 0;
 }
@@ -346,16 +348,16 @@ static void drawHeader() {  // full redraw (on state change)
 static void updateHeader() {
   if (!online) return;
   uint32_t u = st.uptime;
-  char b[16]; snprintf(b, sizeof b, "UP %lud %02luh ", u / 86400, (u % 86400) / 3600);
+  char b[16]; snprintf(b, sizeof b, "up %lud %02luh", u / 86400, (u % 86400) / 3600);
   if (strcmp(b, lastUp)) {
     strcpy(lastUp, b);
-    tft.setTextSize(2); tft.setTextColor(GREY, PANEL);
-    tft.setCursor(150, 4); tft.print(b);
+    tft.fillRect(150, 0, 140, 22, PANEL);
+    put(&FreeSans9pt7b, GREY, 150, 16, b);
   }
   if (strcmp(st.clock, lastClock)) {
     strcpy(lastClock, st.clock);
-    tft.setTextSize(2); tft.setTextColor(WHITE, PANEL);
-    tft.setCursor(W - 72, 4); tft.print(st.clock);
+    tft.fillRect(W - 80, 0, 80, 22, PANEL);
+    put(&FreeSansBold9pt7b, WHITE, W - 12, 16, st.clock, 2);
   }
 }
 
@@ -514,17 +516,17 @@ static void drawClaude() {
   vbar(0, cl.wk); vbar(1, cl.s5h);
   char b[24];
   tft.setTextSize(1);
-  if (cl.s5h >= 0) snprintf(b, sizeof b, "C%3d%% 5H%3d%% %d:%02d  ", cl.ctx, cl.s5h, cl.reset / 60, cl.reset % 60);
-  else snprintf(b, sizeof b, "C%3d%% 5H --        ", cl.ctx);
+  if (cl.s5h >= 0) snprintf(b, sizeof b, "ctx %d%%  5h %d%%  %d:%02d   ", cl.ctx, cl.s5h, cl.reset / 60, cl.reset % 60);
+  else snprintf(b, sizeof b, "ctx %d%%  5h --          ", cl.ctx);
   tft.setTextColor(levelColor(max((int)cl.ctx, (int)cl.s5h), 60, 80), BLACK);
   tft.setCursor(328, 242); tft.print(b);
-  tft.setTextSize(2);
-  if (cl.docker < 0) snprintf(b, sizeof b, "DOCKER --");   // fixed 9 chars: never reaches the UP text at x=150
-  else snprintf(b, sizeof b, "DOCKER %-2d", cl.docker);
-  tft.setTextColor(CYAN, PANEL);
-  tft.setCursor(28, 4); tft.print(b);
-  tft.setTextColor(cl.busy ? YELLOW : GREY, PANEL);
-  tft.setCursor(300, 4); tft.print(cl.busy ? F("CLAUDE*") : F("CLAUDE "));
+  if (cl.docker < 0) snprintf(b, sizeof b, "docker --");
+  else snprintf(b, sizeof b, "docker %d", cl.docker);
+  tft.fillRect(28, 0, 118, 22, PANEL);                       // never reaches the "up" text at x=150
+  put(&FreeSans9pt7b, CYAN, 28, 16, b);
+  tft.fillRect(300, 0, 90, 22, PANEL);
+  put(&FreeSans9pt7b, cl.busy ? YELLOW : GREY, 300, 16, "claude");
+  if (cl.busy) tft.fillCircle(366, 11, 4, YELLOW);            // working dot
   clDrawn = cl; clValid = true;
 }
 
@@ -535,13 +537,12 @@ static void drawStatic() {
   tft.fillScreen(BLACK);
   for (int i = 0; i < 3; i++) gaugeFrame(G[i]);
   for (int i = 0; i < 4; i++) gaugeFrame(T[i]);
-  panelTitle(28, 168, "LOAD HISTORY");
+  panelTitle(28, 168, "Load history");
   tft.setTextColor(CYAN); tft.setCursor(108, 168); tft.print(F("CPU"));
   tft.setTextColor(MAGENTA); tft.setCursor(132, 168); tft.print(F("GPU"));
-  panelTitle(328, 168, "NETWORK");
-  tft.setTextSize(2);
-  tft.setTextColor(GREEN); tft.setCursor(328, 186); tft.print(F("v"));
-  tft.setTextColor(ORANGE); tft.setCursor(328, 222); tft.print(F("^"));
+  panelTitle(328, 168, "Network");
+  tft.fillTriangle(328, 187, 340, 187, 334, 198, GREEN);     // download
+  tft.fillTriangle(328, 226, 340, 226, 334, 215, ORANGE);    // upload
   tft.drawFastVLine(318, 166, 86, DARK);
   tft.drawFastHLine(0, 258, W, DARK);
   graphGeom(false);
@@ -564,7 +565,7 @@ static void setScreen(uint8_t mode) {   // low bits: 0 dashboard, 1 full page, 2
     memset(lineHash, 0, sizeof lineHash);
     if (pageScope) {
       graphGeom(true);
-      panelTitle(26, 163, "LOAD HISTORY");
+      panelTitle(26, 163, "Load history");
       tft.setTextColor(CYAN); tft.setCursor(106, 163); tft.print(F("CPU"));
       tft.setTextColor(MAGENTA); tft.setCursor(130, 163); tft.print(F("GPU"));
       graphRepaint();
@@ -586,14 +587,15 @@ static void redraw() {
   gaugeUpdate(G[2], st.gpu, st.gpu);
   graphPush(st.cpu, st.gpu);
   char b[16];
-  tft.setTextSize(2);
   if (st.down != lastDown) {
     lastDown = st.down; fmtRate(b, sizeof b, st.down);
-    tft.setTextColor(GREEN, BLACK); tft.setCursor(348, 186); tft.print(b);
+    tft.fillRect(346, 182, 130, 26, BLACK);
+    put(&FreeSansBold12pt7b, WHITE, 348, 202, b);
   }
   if (st.up != lastUpR) {
     lastUpR = st.up; fmtRate(b, sizeof b, st.up);
-    tft.setTextColor(ORANGE, BLACK); tft.setCursor(348, 222); tft.print(b);
+    tft.fillRect(346, 212, 130, 26, BLACK);
+    put(&FreeSansBold12pt7b, WHITE, 348, 232, b);
   }
   gaugeNotes();
 }

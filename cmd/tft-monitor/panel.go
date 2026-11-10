@@ -164,28 +164,63 @@ func groupNames(s *snapshot, alerts bool) []string {
 	return n
 }
 
+// settle is a hysteresis latch: cond must hold for `rise` before the page joins the rotation and must be
+// gone for `fall` before it leaves, so a load that flickers around a threshold does not flip the screen.
+type latch struct {
+	on    bool
+	since time.Time
+}
+
+var debounce = map[string]*latch{}
+
+func settle(name string, cond bool, rise, fall time.Duration) bool {
+	l := debounce[name]
+	if l == nil {
+		l = &latch{}
+		debounce[name] = l
+	}
+	now := time.Now()
+	if cond == l.on {
+		l.since = time.Time{}
+		return l.on
+	}
+	if l.since.IsZero() {
+		l.since = now
+	}
+	d := rise
+	if l.on {
+		d = fall
+	}
+	if now.Sub(l.since) >= d {
+		l.on, l.since = cond, time.Time{}
+	}
+	return l.on
+}
+
 func eligibleNames(s *snapshot, alerts bool) []string {
 	var n []string
 	if alerts {
 		n = append(n, "alerts")
 	}
-	if loadBusy(s) || ramBusy(s) { // busy machine: the credits take over the band
-		if loadBusy(s) {
+	busyCPU := settle("rollcpu", loadBusy(s), 8*time.Second, 12*time.Second)
+	busyMem := settle("rollmem", ramBusy(s), 8*time.Second, 12*time.Second)
+	if busyCPU || busyMem { // busy machine: the credits take over the band
+		if busyCPU {
 			n = append(n, "rollcpu")
 		}
-		if ramBusy(s) {
+		if busyMem {
 			n = append(n, "rollmem")
 		}
 		return n
 	}
 	n = append(n, "dash")
-	if s.dock.ok && s.dock.unhealthy+s.dock.bad+s.dock.restarting > 0 { // healthy docker is just noise
-		n = append(n, "docker")
+	if settle("docker", s.dock.ok && s.dock.unhealthy+s.dock.bad+s.dock.restarting > 0, 5*time.Second, 30*time.Second) {
+		n = append(n, "docker") // healthy docker is just noise
 	}
-	if systemWorth(s) {
+	if settle("system", systemWorth(s), 8*time.Second, 30*time.Second) {
 		n = append(n, "system")
 	}
-	if len(s.top.cpu) > 0 && s.top.cpu[0].v >= 10 {
+	if settle("top", len(s.top.cpu) > 0 && s.top.cpu[0].v >= 10, 10*time.Second, 30*time.Second) {
 		n = append(n, "top")
 	}
 	return n
@@ -286,7 +321,9 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 				cur = i
 			}
 		}
-		if cur < 0 {
+		if cur < 0 && isFull(p.name) && now.Sub(p.enteredAt) < 10*time.Second {
+			name, sub = p.name, p.sub // a full page stays at least 10 s even if its reason just went away
+		} else if cur < 0 {
 			name, p.enteredAt = names[0], now
 		} else {
 			name, sub = p.name, p.sub
