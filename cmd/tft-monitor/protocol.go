@@ -68,6 +68,8 @@ func claudeFrame(c claudeInfo, docker int) []byte {
 // Info-panel (bottom band) frames. The PC lays everything out; the Mega only draws what it is told.
 const (
 	frameSummary = 6 // 22 bytes: uptime s (u32) | Wh x10 (u32) | peak cpu gpu cpuT gpuT avgCpu (u8) | down MB (u32) | up MB (u32) | fullest disk %
+	frameScreen  = 8 // 1 byte: 0 = dashboard (gauges + band), 1 = full-screen page, 2 = full-screen page, cleared first
+	frameLine    = 9 // row (0 = title, 1..9) | style | pct | "label\tvalue" - a row of a full-screen page
 	frameBye     = 7 // 3 bytes: reason (1 off, 2 reboot, 3 monitor stopped) | hh | mm
 	frameBand    = 4 // 3 bytes: page idx | page count | flags (bits0-1 severity, bit2 clear band, bit3 border visible)
 	frameCell    = 5 // slot | style | pct | "label\tvalue"
@@ -91,6 +93,7 @@ const (
 	sWide   = 1 << 5 // span both columns (slot must be even)
 	sBig    = 1 << 6 // size-2 text
 	sBright = 1 << 7 // label uses the palette colour too
+	sSwap   = 1 << 5 // full-screen bar rows only: text starts with the swap % (3 digits), drawn as a thin bar under the row
 )
 
 type cell struct {
@@ -135,4 +138,14 @@ func summaryFrame(uptime, wh10 uint32, peaks [5]int, downMB, upMB uint64, disk i
 
 func byeFrame(reason byte, hh, mm int) []byte {
 	return frame(frameBye, []byte{reason, byte(hh), byte(mm)})
+}
+
+func screenFrame(mode byte) []byte { return frame(frameScreen, []byte{mode}) }
+
+// lineFrame is a row of a full-screen page; c.slot is the row.
+func lineFrame(c cell) []byte {
+	f := cellFrame(c)
+	f[2] = frameLine
+	f[len(f)-1] = crc8(f[2 : len(f)-1])
+	return f
 }

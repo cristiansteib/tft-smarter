@@ -23,6 +23,8 @@ type dockerInfo struct {
 	top                                            []nameVal // by memory, bytes
 }
 
+const topN = 10 // processes kept per ranking (rolling credits show them all)
+
 type topInfo struct {
 	cpu []nameVal // percent of one core
 	mem []nameVal // bytes
@@ -70,7 +72,7 @@ func startCollectors() *bg {
 			}
 			sort.Slice(t.cpu, func(i, j int) bool { return t.cpu[i].v > t.cpu[j].v })
 			sort.Slice(t.mem, func(i, j int) bool { return t.mem[i].v > t.mem[j].v })
-			t.cpu, t.mem = t.cpu[:min(len(t.cpu), 3)], t.mem[:min(len(t.mem), 3)]
+			t.cpu, t.mem = t.cpu[:min(len(t.cpu), topN)], t.mem[:min(len(t.mem), topN)]
 			b.mu.Lock()
 			b.top = t
 			b.mu.Unlock()

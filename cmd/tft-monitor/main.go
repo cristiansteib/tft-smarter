@@ -335,6 +335,7 @@ func run(port serial.Port, cpuT string) error {
 				return err
 			}
 		}
+		latest.Store(pan.doc(snap, eng, down, up, uint32(uptime), now))
 	}
 }
 
@@ -370,7 +371,9 @@ func main() {
 	}
 	cpuT := cpuTempFile()
 	collectors, eng, pan = startCollectors(), newEngine(), newPanel()
+	loadCfg()
 	listenNotify(eng)
+	listenCtl(eng)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -389,6 +392,7 @@ func main() {
 			err = run(p, cpuT)
 			p.Close()
 		}
+		disconnected()
 		log.Printf("serial error: %v - retrying", err)
 		time.Sleep(2 * time.Second)
 	}

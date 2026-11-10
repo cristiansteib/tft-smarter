@@ -163,6 +163,58 @@ static void drawCell(const uint8_t *p, uint8_t len) {   // slot | style | pct | 
   }
 }
 
+// ---- full-screen pages: the PC replaces the whole dashboard with a list of rows ----
+// Row 0 is the title (big), rows 1..9 are data lines: [row | style | pct | "label\tvalue"].
+static bool pageMode = false, pageScope = false;
+static uint16_t lineHash[10];
+#define LROW 31
+
+static void drawLine(const uint8_t *p, uint8_t len) {
+  if (len < 3 || p[0] > 9) return;
+  uint8_t row = p[0], style = p[1], pct = p[2];
+  uint16_t h = fnv(p, len);
+  if (lineHash[row] == h) return;
+  lineHash[row] = h;
+  char txt[73];
+  uint8_t tl = min((int)len - 3, 72);
+  memcpy(txt, p + 3, tl); txt[tl] = 0;
+  bool bar = style & 0x10, big = style & 0x40, bright = style & 0x80;
+  bool sub = bar && (style & 0x20);        // bar row with a thin swap bar under it: text starts with the swap % as 3 digits
+  uint8_t swp = 0;
+  if (sub && tl >= 3) { swp = min(100, (txt[0] - '0') * 100 + (txt[1] - '0') * 10 + (txt[2] - '0')); memmove(txt, txt + 3, tl - 2); }
+  else sub = false;
+  char *val = strchr(txt, '\t');
+  if (val) *val++ = 0;
+  uint16_t col = PAL[min(style & 15, 8)];
+  int y = 4 + row * LROW;
+  tft.fillRect(0, y, W, LROW - 3 + (sub ? 5 : 0), BLACK);
+  uint8_t sz = big ? 3 : 2;
+  tft.setTextSize(sz);
+  tft.setTextColor((bright || big) ? col : bar ? WHITE : GREY, BLACK);
+  tft.setCursor(14, y + (big ? 3 : 7)); tft.print(txt);
+  if (big) tft.drawFastHLine(14, y + LROW - 4, W - 28, DARK);
+  if (!val) return;
+  tft.setTextColor(col, BLACK);
+  if (bar) {
+    int bx = 170, bw = 220, fill = (long)(bw - 2) * min((int)pct, 100) / 100;
+    tft.drawRect(bx, y + 3, bw, 20, GREY);
+    tft.fillRect(bx + 1, y + 4, fill, 18, col);
+    tft.setCursor(bx + bw + 8, y + 7); tft.print(val);
+    if (sub) {                               // thin swap bar, same width, with its own value
+      uint16_t sc = swp >= 60 ? RED : swp >= 25 ? ORANGE : SWAP_OK;
+      tft.drawRect(bx, y + 26, bw, 5, GREY);
+      tft.fillRect(bx + 1, y + 27, (long)(bw - 2) * swp / 100, 3, sc);
+      tft.setTextSize(1); tft.setTextColor(sc, BLACK);
+      tft.setCursor(14, y + 24); tft.print(F("SWAP"));
+      tft.setCursor(bx + bw + 8, y + 25); tft.print(swp); tft.print('%');
+    }
+  } else {
+    tft.setCursor(W - 14 - (int)strlen(val) * 6 * sz, y + (big ? 3 : 7)); tft.print(val);
+  }
+}
+
+static void setScreen(uint8_t mode);   // defined after drawStatic()
+
 static void drawBand(const uint8_t *p, uint8_t len) {   // page idx | page count | flags
   if (len < 3) return;
   uint8_t idx = p[0], cnt = min((int)p[1], 6), sev = p[2] & 3, border = (p[2] & 8) != 0;
@@ -181,9 +233,16 @@ static void drawBand(const uint8_t *p, uint8_t len) {   // page idx | page count
 
 static void drawPanelItem() {
   if (!qn) return;
-  Item &it = q[qh];
-  if (it.type == 5) drawCell(it.d, it.len); else drawBand(it.d, it.len);
+  Item it = q[qh];
   qh = (qh + 1) % 6; qn--;
+  if (it.type == 8) {                      // screen switch: 0 dashboard, 1 full page, 2 full page + clear
+    uint8_t keepH = qh, keepN = qn;        // repainting the dashboard resets the queue; keep the rows behind us
+    setScreen(it.d[0]);
+    qh = keepH; qn = keepN;
+  } else if (it.type == 9) { if (pageMode) drawLine(it.d, it.len); }   // full-screen row
+  else if (pageMode) { /* band/cell frames are stale while a full page is up */ }
+  else if (it.type == 5) drawCell(it.d, it.len);
+  else drawBand(it.d, it.len);
 }
 
 // ---- small text under the gauges (temperatures, VRAM) ----
@@ -210,17 +269,32 @@ static void gaugeNotes() {
   snprintf(b, sizeof b, "S%2d%%", st.swap);
   tft.setTextColor(st.swap >= 60 ? RED : st.swap >= 25 ? ORANGE : SWAP_OK, BLACK);
   tft.setCursor(G[1].cx - 24, G[1].cy + 16); tft.print(b);
-  if (memcmp(lastLoad, st.load, sizeof lastLoad)) {   // load averages under the CPU gauge
+  if (memcmp(lastLoad, st.load, sizeof lastLoad)) {   // 1 and 5 min load inside the CPU gauge, above the %
     memcpy(lastLoad, st.load, sizeof lastLoad);
-    uint16_t t[3];                                      // tenths, rounded
-    for (int i = 0; i < 3; i++) t[i] = (st.load[i] + 5) / 10;
-    char tmp[24];
-    snprintf(tmp, sizeof tmp, "%u.%u %u.%u %u.%u", t[0] / 10, t[0] % 10, t[1] / 10, t[1] % 10, t[2] / 10, t[2] % 10);
-    snprintf(b, sizeof b, "%-12s", tmp);                // pad so a shorter value overwrites the old one
     uint32_t per = (uint32_t)st.load[0] * 100 / st.ncpu;   // 1-min load per core, percent
-    tft.setTextSize(2);
-    tft.setTextColor(per >= 100 ? RED : per >= 60 ? ORANGE : GREY, BLACK);
-    tft.setCursor(G[0].cx - 72, G[0].cy + 64); tft.print(b);
+    uint16_t col = per >= 100 ? RED : per >= 60 ? ORANGE : GREY;
+    int cx = G[0].cx, y = G[0].cy - 32;
+    tft.fillRect(cx - 32, G[0].cy - 36, 64, 22, BLACK);
+    uint16_t t[2];                                      // tenths, rounded
+    char ip[2][6];
+    int w = 0;
+    for (int i = 0; i < 2; i++) {
+      t[i] = (st.load[i] + 5) / 10;
+      snprintf(ip[i], sizeof ip[i], "%u", t[i] / 10);
+      w += strlen(ip[i]) * 12 + (t[i] < 100 ? 12 : 0);   // big int (12 px/digit) + small ".d" (12 px)
+    }
+    w += 6;                                             // gap between the two values
+    int x = cx - w / 2;
+    tft.setTextColor(col, BLACK);
+    for (int i = 0; i < 2; i++) {
+      tft.setTextSize(2); tft.setCursor(x, y); tft.print(ip[i]);
+      x += strlen(ip[i]) * 12;
+      if (t[i] < 100) {                                 // decimal only while there is room
+        tft.setTextSize(1); tft.setCursor(x, y + 7); tft.print('.'); tft.print(t[i] % 10);
+        x += 12;
+      }
+      x += 6;
+    }
   }
   if (st.vram != lastVram || st.gpuW != lastW) {
     lastVram = st.vram; lastW = st.gpuW;
@@ -266,11 +340,13 @@ static void updateHeader() {
 }
 
 // ---- oscilloscope-style load history ----
-#define GX 42
-#define GY 184
-#define GSTEP 3
+// scope geometry: compact on the dashboard, full-width and taller on the CPU-hogs page
+static int GX = 42, GY = 184, GSTEP = 3, GH = 66;
 #define GW ((HIST - 1) * GSTEP)
-#define GH 66
+static void graphGeom(bool wide) {
+  if (wide) { GX = 26; GY = 173; GSTEP = 5; GH = 94; }
+  else      { GX = 42; GY = 184; GSTEP = 3; GH = 66; }
+}
 #define SC_FRAME 0x0540
 #define SC_GRID  0x0320
 #define SC_AXIS  0x04A0
@@ -316,15 +392,16 @@ static void graphGrid(int x, int w) {   // redraw background for columns [x, x+w
   }
 }
 
-static void graphReset() {
+static void graphFrame() {
   tft.drawRect(GX - 1, GY - 1, GW + 3, GH + 2, SC_FRAME);
   graphGrid(GX, GW + 1);
   tft.setTextSize(1); tft.setTextColor(SC_AXIS, BLACK);
-  tft.setCursor(22, GY); tft.print(F("100"));
-  tft.setCursor(28, GY + GH / 2 - 3); tft.print(F("50"));
-  tft.setCursor(34, GY + GH - 8); tft.print(F("0"));
-  gPos = 0; gTotal = 0;
+  tft.setCursor(GX - 20, GY); tft.print(F("100"));
+  tft.setCursor(GX - 14, GY + GH / 2 - 3); tft.print(F("50"));
+  tft.setCursor(GX - 8, GY + GH - 8); tft.print(F("0"));
 }
+
+static void graphReset() { graphFrame(); gPos = 0; gTotal = 0; }
 
 static inline int gy(uint8_t v) { return GY + GH - 3 - v * (GH - 4) / 100; }
 
@@ -356,6 +433,19 @@ static void graphPush(uint8_t cpu, uint8_t gpu) {
   recolor(AGE2, 3);
   gTotal++;
   if (++gPos >= HIST) gPos = 0;
+}
+
+// repaint the whole trace from the ring buffer (coming back from another screen keeps the history)
+static void graphRepaint() {
+  graphFrame();
+  for (int j = 1; j < HIST; j++) {
+    if (gTotal < HIST && j >= gPos) break;                          // not written yet
+    if (gTotal >= HIST && j >= gPos && j < gPos + 3) continue;      // the gap ahead of the beam
+    int age = ((int)gPos - 1 - j + 2 * HIST) % HIST;                // 0 = newest sample
+    int lv = age == 0 ? 0 : age < AGE1 ? 1 : age < AGE2 ? 2 : 3;
+    drawSeg(hG, j, GPU_C[lv]);
+    drawSeg(hC, j, CPU_C[lv]);
+  }
 }
 
 // ---- Claude session usage: two vertical bars (context fill, 5h limit) ----
@@ -420,6 +510,7 @@ static void drawClaude() {
 static int32_t lastDown = -1, lastUpR = -1;
 
 static void drawStatic() {
+  pageMode = pageScope = false;
   tft.fillScreen(BLACK);
   for (int i = 0; i < 3; i++) gaugeFrame(G[i]);
   for (int i = 0; i < 4; i++) gaugeFrame(T[i]);
@@ -432,15 +523,42 @@ static void drawStatic() {
   tft.setTextColor(ORANGE); tft.setCursor(328, 222); tft.print(F("^"));
   tft.drawFastVLine(318, 166, 86, DARK);
   tft.drawFastHLine(0, 258, W, DARK);
-  graphReset();
+  graphGeom(false);
+  graphRepaint();
   vbarFrame(); clValid = false;
   memset(cellHash, 0, sizeof cellHash); bIdx = bCnt = bSev = bBorder = 255; qn = 0;
   lastVram = -1; lastW = 0; lastLoad[0] = 65535;
   lastDown = lastUpR = -1;
 }
 
+static void setScreen(uint8_t mode) {   // low bits: 0 dashboard, 1 full page, 2 full page cleared first; 0x10 = load scope on the page
+  uint8_t m = mode & 3;
+  bool full = m != 0;
+  if (full && pageMode && m != 2) return;
+  if (!full && !pageMode) return;
+  if (full) {
+    pageMode = true;
+    pageScope = mode & 0x10;
+    tft.fillScreen(BLACK);
+    memset(lineHash, 0, sizeof lineHash);
+    if (pageScope) {
+      graphGeom(true);
+      panelTitle(26, 163, "LOAD HISTORY");
+      tft.setTextColor(CYAN); tft.setCursor(98, 163); tft.print(F("CPU"));
+      tft.setTextColor(MAGENTA); tft.setCursor(122, 163); tft.print(F("GPU"));
+      graphRepaint();
+    }
+  } else {
+    drawStatic(); drawHeader();        // repaints everything; the stats loop refills the gauges
+  }
+}
+
 static void redraw() {
   if (!online) { drawHeader(); return; }
+  if (pageMode) {                     // a full-screen page owns the display
+    if (pageScope) graphPush(st.cpu, st.gpu);
+    return;
+  }
   updateHeader();
   gaugeUpdate(G[0], st.cpu, st.cpu);
   gaugeUpdate(G[1], st.ram, st.ram);
@@ -672,7 +790,8 @@ static void ssTick() {
 }
 
 // ---- binary protocol: 0xAA 0x55 | type | len | payload | crc8(type,len,payload) ----
-enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7 };
+enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7, F_SCREEN = 8, F_LINE = 9 };
+
 static bool gotS, gotC;
 static uint16_t framesOk, framesBad;   // reported back to the PC every 5 s for diagnostics
 
@@ -706,7 +825,7 @@ static void handleFrame(uint8_t type, const uint8_t *p, uint8_t len) {
     sumValid = true;
   } else if (type == F_BYE && len == 3) {
     byeReason = p[0]; offH = min((int)p[1], 23); offM = min((int)p[2], 59); byeGot = true;
-  } else if (type == F_BAND || type == F_CELL) {
+  } else if (type == F_BAND || type == F_CELL || type == F_LINE || (type == F_SCREEN && len == 1)) {
     enqueue(type, p, len);
   }
 }
@@ -788,9 +907,9 @@ void loop() {
     }
     lastRx = millis();
     redraw();
-    if (!clValid) drawClaude();
+    if (!clValid && !pageMode) drawClaude();
   }
-  if (gotC) { gotC = false; if (online) drawClaude(); }
+  if (gotC) { gotC = false; if (online && !pageMode) drawClaude(); }
   if (byeGot) {
     byeGot = false;
     if (sumValid && !saver) startSaver(byeReason, offH, offM, millis());
