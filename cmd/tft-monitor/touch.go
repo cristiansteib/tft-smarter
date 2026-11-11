@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -67,17 +68,12 @@ func usable(name string, s *snapshot) bool {
 	if cfg().Disabled[name] {
 		return false
 	}
-	return !(name == "rollcpu" && len(hogsCPU(s)) == 0) && !(name == "rollmem" && len(hogsMem(s)) == 0)
+	return !isRoll(name) || hogCount(name, s) > 0
 }
 
 // step moves to the next (dir=+1) or previous (-1) usable page.
 func (p *panel) step(dir int, s *snapshot, now time.Time) {
-	at := -1
-	for i, n := range allPages {
-		if n == p.name {
-			at = i
-		}
-	}
+	at := slices.Index(allPages, p.name)
 	for k := 1; k <= len(allPages); k++ {
 		if n := allPages[((at+dir*k)%len(allPages)+len(allPages))%len(allPages)]; usable(n, s) {
 			p.goTo(n, now)
@@ -96,12 +92,17 @@ func (p *panel) goTo(name string, now time.Time) {
 	p.manual, p.manualEnd = name, now.Add(returnHold())
 }
 
+// current is the page on screen, or the one a tap just opened (it counts even before the screen has switched).
+func (p *panel) current(now time.Time) string {
+	if p.manual != "" && now.Before(p.manualEnd) {
+		return p.manual
+	}
+	return p.name
+}
+
 // togglePin keeps the current page up (no return home, no alert takeover) or lets it go.
 func (p *panel) togglePin(now time.Time) {
-	cur := p.name
-	if p.manual != "" && now.Before(p.manualEnd) {
-		cur = p.manual // a page a tap just opened counts, even before the screen has switched
-	}
+	cur := p.current(now)
 	if cur == "" || cur == "alerts" { // alerts are a state of the dashboard, not a page: pin the dashboard instead
 		return
 	}
@@ -133,11 +134,7 @@ func (p *panel) handleTouch(ev touchEv, s *snapshot, now time.Time) {
 		if ev.x < 0 || ev.x >= len(targets) {
 			return
 		}
-		cur := p.name
-		if p.manual != "" && now.Before(p.manualEnd) {
-			cur = p.manual
-		}
-		if targets[ev.x] == cur { // tapping the tab you are on pins the page (works on every screen), tap again to let go
+		if targets[ev.x] == p.current(now) { // tapping the tab you are on pins the page (works on every screen), tap again to let go
 			p.togglePin(now)
 		} else {
 			p.goTo(targets[ev.x], now)

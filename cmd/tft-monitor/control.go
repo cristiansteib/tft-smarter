@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -31,21 +33,16 @@ func defaultSettings() settings {
 }
 
 var (
-	cfgMu  sync.RWMutex
-	cfgVal = defaultSettings()
-	skipAt atomic.Bool // "next page" requested
+	cfgVal atomic.Pointer[settings] // never modified once stored: setCfg stores a fresh copy
+	saveMu sync.Mutex               // orders the store and the file write of concurrent setCfg calls
+	skipAt atomic.Bool              // "next page" requested
 )
 
-func cfg() settings {
-	cfgMu.RLock()
-	defer cfgMu.RUnlock()
-	c := cfgVal
-	c.Disabled = map[string]bool{}
-	for k, v := range cfgVal.Disabled {
-		c.Disabled[k] = v
-	}
-	return c
-}
+func init() { d := defaultSettings(); cfgVal.Store(&d) }
+
+// cfg returns the current settings. It is cheap (no copy of the map): callers may change the plain fields of their
+// copy and hand it to setCfg, but must treat Disabled as read-only (clone it to change it).
+func cfg() settings { return *cfgVal.Load() }
 
 func cfgPath() string {
 	d, _ := os.UserConfigDir()
@@ -65,7 +62,7 @@ func loadCfg() {
 		if c.Disabled == nil {
 			c.Disabled = map[string]bool{}
 		}
-		cfgVal = c
+		cfgVal.Store(&c)
 	}
 }
 
@@ -77,12 +74,13 @@ func setCfg(c settings) {
 	c.CreditStepMs = min(max(c.CreditStepMs, 300), 5000)
 	c.DwellSec = min(max(c.DwellSec, 2), 120)
 	c.ReturnSec = min(max(c.ReturnSec, 15), 600)
+	c.Disabled = maps.Clone(c.Disabled) // the stored map is shared by every cfg() copy: it must never change
 	if c.Disabled == nil {
 		c.Disabled = map[string]bool{}
 	}
-	cfgMu.Lock()
-	cfgVal = c
-	cfgMu.Unlock()
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	cfgVal.Store(&c)
 	if b, err := json.MarshalIndent(c, "", "  "); err == nil {
 		os.MkdirAll(filepath.Dir(cfgPath()), 0o755)
 		os.WriteFile(cfgPath(), b, 0o644)
@@ -178,25 +176,23 @@ func (p *panel) doc(s *snapshot, e *engine, down, up int, uptime uint32, now tim
 		g.Load[i] = float64(l) / 100
 	}
 	d.PSI = s.psi
-	for _, k := range s.disks {
-		d.Disks = append(d.Disks, diskDoc{k.name, k.pct})
+	if len(s.disks) > 0 { // nil stays "null" in the JSON
+		d.Disks = make([]diskDoc, len(s.disks))
 	}
-	for _, t := range s.top.cpu {
-		d.TopCPU = append(d.TopCPU, procDoc{t.name, t.v})
+	for i, k := range s.disks {
+		d.Disks[i] = diskDoc{k.name, k.pct}
 	}
-	for _, t := range s.top.mem {
-		d.TopMem = append(d.TopMem, procDoc{t.name, t.v})
-	}
+	d.TopCPU, d.TopMem = procDocs(s.top.cpu), procDocs(s.top.mem)
 	d.Docker = map[string]int{"ok": b2i(s.dock.ok), "total": s.dock.total, "up": s.dock.up, "unhealthy": s.dock.unhealthy, "restarting": s.dock.restarting, "bad": s.dock.bad}
 	d.Hog = map[string]bool{"cpu": loadBusy(s), "mem": ramBusy(s)}
 	c := cfg()
 	d.Panel = panelDoc{Page: p.name, Sub: p.sub, Subs: subPages(p.name, s), Pin: c.Pin, Full: p.full}
-	elig := map[string]bool{}
-	for _, n := range eligibleNames(s, false) {
-		elig[n] = true
+	d.Panel.Pages = make([]pageDoc, len(allPages))
+	for i, n := range allPages {
+		d.Panel.Pages[i] = pageDoc{n, slices.Contains(p.elig, n), !c.Disabled[n]} // p.elig: worked out by this tick
 	}
-	for _, n := range allPages {
-		d.Panel.Pages = append(d.Panel.Pages, pageDoc{n, elig[n], !c.Disabled[n]})
+	if len(p.shown) > 0 {
+		d.Panel.Cells = make([]cellDoc, 0, len(p.shown))
 	}
 	for slot, cl := range p.shown {
 		d.Panel.Cells = append(d.Panel.Cells, cellDoc{int(slot), int(cl.style), int(cl.pct), cl.text})
@@ -207,6 +203,17 @@ func (p *panel) doc(s *snapshot, e *engine, down, up int, uptime uint32, now tim
 		d.Alerts = append(d.Alerts, alertDoc{a.key, a.title, a.detail, a.sev})
 	}
 	return d
+}
+
+func procDocs(v []nameVal) []procDoc {
+	if len(v) == 0 {
+		return nil // "null" in the JSON
+	}
+	o := make([]procDoc, len(v))
+	for i, t := range v {
+		o[i] = procDoc{t.name, t.v}
+	}
+	return o
 }
 
 func disconnected() {

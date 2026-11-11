@@ -6,41 +6,32 @@ import (
 )
 
 // netHist keeps one cumulative sample per minute for the last hour, so the network page can show
-// "last hour" transfer and the busiest rate of that hour next to the since-boot totals.
+// "last hour" transfer next to the since-boot totals.
 type netHist struct {
 	rx, tx [61]uint64 // cumulative bytes, ring of per-minute samples
-	pd, pu [60]int    // per-minute peak rates, kbit/s
 	n      int        // samples stored (<= 61)
 	head   int
 	last   time.Time
-	curD   int
-	curU   int
 }
 
-// update is called every tick with the cumulative counters and the current rates (kbit/s).
-func (h *netHist) update(now time.Time, rx, tx uint64, down, up int) {
-	h.curD, h.curU = max(h.curD, down), max(h.curU, up)
+// update is called every tick with the cumulative counters.
+func (h *netHist) update(now time.Time, rx, tx uint64) {
 	if !h.last.IsZero() && now.Sub(h.last) < time.Minute {
 		return
 	}
 	h.head = (h.head + 1) % 61
 	h.rx[h.head], h.tx[h.head] = rx, tx
-	h.pd[h.head%60], h.pu[h.head%60] = h.curD, h.curU
-	h.curD, h.curU = 0, 0
 	h.n = min(h.n+1, 61)
 	h.last = now
 }
 
-// hour returns the transfer over the stored window (up to 60 min) and the peak rates in it.
-func (h *netHist) hour(rx, tx uint64) (dRx, dTx uint64, peakD, peakU int) {
+// hour returns the transfer over the stored window (up to 60 min).
+func (h *netHist) hour(rx, tx uint64) (dRx, dTx uint64) {
 	if h.n > 0 {
 		old := (h.head - (h.n - 1) + 61) % 61
 		dRx, dTx = rx-min(rx, h.rx[old]), tx-min(tx, h.tx[old])
 	}
-	for i := 0; i < min(h.n, 60); i++ {
-		peakD, peakU = max(peakD, h.pd[i]), max(peakU, h.pu[i])
-	}
-	return dRx, dTx, max(peakD, h.curD), max(peakU, h.curU)
+	return dRx, dTx
 }
 
 // avgN is a 3 s moving average with a dead band: the shown value only moves when the average moved by more

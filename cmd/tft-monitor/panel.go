@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -24,9 +24,9 @@ type panel struct {
 	hold      time.Time // the Mega is busy repainting after a screen switch: send nothing until then
 	repaint   bool      // force the board to repaint the current screen (the menu was drawn over it)
 	resend    bool      // the board repainted itself: send every cell again
-	lastView  string    // last real page shown, where Settings returns to
 	lastTap   touchEv   // the previous tap, for double-tap detection
 	sentSlot  int       // last menu slot sent to the board (-1 = none yet)
+	elig      []string  // pages eligible on this tick (the hysteresis latches run once per tick, in tick)
 }
 
 func newPanel() *panel { return &panel{shown: map[byte]cell{}, sentSlot: -1} }
@@ -48,13 +48,6 @@ func gb(b float64) string {
 	return fmt.Sprintf("%.0fM", b/(1<<20))
 }
 
-func wh(v float64) string {
-	if v >= 1000 {
-		return fmt.Sprintf("%.2fkWh", v/1000)
-	}
-	return fmt.Sprintf("%.0fWh", v)
-}
-
 func short(s string, n int) string {
 	if len(s) > n {
 		return s[:n]
@@ -70,8 +63,9 @@ func isRoll(name string) bool { return name == "rollcpu" || name == "rollmem" }
 // A process is a hog when it eats at least one good chunk of a core / of the RAM.
 func hogsCPU(s *snapshot) []nameVal {
 	var o []nameVal
+	lim := cfg().HogCPU
 	for _, t := range s.top.cpu {
-		if t.v >= cfg().HogCPU {
+		if t.v >= lim {
 			o = append(o, t)
 		}
 	}
@@ -80,12 +74,21 @@ func hogsCPU(s *snapshot) []nameVal {
 
 func hogsMem(s *snapshot) []nameVal {
 	var o []nameVal
+	lim := cfg().HogMem
 	for _, t := range s.top.mem {
-		if s.memTotal > 0 && t.v/s.memTotal*100 >= cfg().HogMem {
+		if s.memTotal > 0 && t.v/s.memTotal*100 >= lim {
 			o = append(o, t)
 		}
 	}
 	return o
+}
+
+// hogCount is how many rows creditLines returns, without formatting them.
+func hogCount(name string, s *snapshot) int {
+	if name == "rollcpu" {
+		return len(hogsCPU(s))
+	}
+	return len(hogsMem(s))
 }
 
 // the credits only run when the machine is busy AND somebody is to blame
@@ -147,8 +150,7 @@ func subPages(name string, s *snapshot) int {
 		return settingsSubs
 	}
 	if isRoll(name) {
-		_, rows := creditLines(name, s)
-		return max(1, len(rows)-rollRows(name)+1) // rolls only when there are more hogs than rows
+		return max(1, hogCount(name, s)-rollRows(name)+1) // rolls only when there are more hogs than rows
 	}
 	return 1
 }
@@ -178,9 +180,8 @@ func dwell(name string, sub, subs int) time.Duration {
 	return d
 }
 
-// groupNames is the rotation: eligible pages minus the ones the user disabled in the UI.
-func groupNames(s *snapshot, alerts bool) []string {
-	all := eligibleNames(s, alerts)
+// groupNames is the rotation: the eligible pages minus the ones the user disabled in the UI.
+func groupNames(all []string) []string {
 	dis := cfg().Disabled
 	var n []string
 	for _, x := range all {
@@ -247,13 +248,7 @@ func eligibleNames(s *snapshot, alerts bool) []string {
 	return n
 }
 
-// systemWorth: the health page is only worth a slot when something there is off.
-func systemWorth(s *snapshot) bool {
-	return s.psi[0] >= 5 || s.psi[1] >= 2 || s.psi[2] >= 10 || s.nvmeT >= 60 || s.latency < 0 || s.latency >= 100
-}
-
 func (p *panel) build(name string, sub int, s *snapshot, list []*alert, take bool, since, now time.Time) []cell {
-	var cs []cell
 	if name == "settings" {
 		return p.buildSettings(sub)
 	}
@@ -265,11 +260,10 @@ func (p *panel) build(name string, sub int, s *snapshot, list []*alert, take boo
 		}
 		return cs
 	}
+	var cs []cell
 	switch name {
-	case "dash": // gauges stay up top; the band shows the four fullest disks, fullest first
-		ds := append([]disk(nil), s.disks...)
-		sort.Slice(ds, func(i, j int) bool { return ds[i].pct > ds[j].pct })
-		for i, d := range ds[:min(4, len(ds))] {
+	case "dash": // gauges stay up top; the band shows the four fullest disks (disks() keeps them fullest first)
+		for i, d := range s.disks[:min(4, len(s.disks))] {
 			cs = append(cs, cell{byte(i), pal(d.pct, 70, 90) | sBar, byte(d.pct), fmt.Sprintf("%s\t%d%%", short(d.name, 6), d.pct)})
 		}
 	case "alerts":
@@ -281,8 +275,7 @@ func (p *panel) build(name string, sub int, s *snapshot, list []*alert, take boo
 			step = int(now.Sub(since) / (4 * time.Second))
 		}
 		a := list[step%len(list)]
-		col := map[int]byte{sevOK: pGreen, sevInfo: pCyan, sevWarn: pOrange, sevCrit: pRed}[a.sev]
-		cs = append(cs, cell{0, col | sWide | sBig | sBright, 0, short(a.title, 24)})
+		cs = append(cs, cell{0, sevColor(a.sev) | sWide | sBig | sBright, 0, short(a.title, 24)})
 		d := short(a.detail, 30)
 		if len(list) > 1 {
 			d = fmt.Sprintf("%s  %d/%d", short(a.detail, 24), step%len(list)+1, len(list))
@@ -290,6 +283,20 @@ func (p *panel) build(name string, sub int, s *snapshot, list []*alert, take boo
 		cs = append(cs, cell{2, pWhite | sWide, 0, d})
 	}
 	return cs
+}
+
+func sevColor(sev int) byte {
+	switch sev {
+	case sevOK:
+		return pGreen
+	case sevInfo:
+		return pCyan
+	case sevWarn:
+		return pOrange
+	case sevCrit:
+		return pRed
+	}
+	return pWhite
 }
 
 // tick returns the frames to send now. It must be called every ~250 ms.
@@ -305,13 +312,11 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 			maxSev = max(maxSev, a.sev)
 		}
 	}
-	names := groupNames(s, take && len(list) > 0 || real > 0)
-	var name string
-	sub := 0
-	skip := skipAt.Swap(false) // "next page" from the UI
-	if skip {
-		p.step(1, s, now) // with a page pinned this moves the pin
-		skip = false
+	takeover := take && len(list) > 0
+	p.elig = eligibleNames(s, takeover || real > 0)
+	names := groupNames(p.elig)
+	if skipAt.Swap(false) { // "next page" from the UI; with a page pinned this moves the pin
+		p.step(1, s, now)
 	}
 	if prevAt.Swap(false) {
 		p.step(-1, s, now)
@@ -324,40 +329,36 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 			done = true
 		}
 	}
-	pin := cfg().Pin
-	override := false
+	held := cfg().Pin // the pinned page, after the touches had their say
+	name, sub := "", 0
+	pin, override := held, false
 	if p.manual != "" && now.Before(p.manualEnd) { // a page chosen by touch (or the settings) wins over the pin for a while
 		pin, override = p.manual, true
 	}
-	if pin != "" && (override || isFull(pin) || !(take && len(list) > 0)) { // a pinned full page stays even when an alert fires
+	if pin != "" && (override || isFull(pin) || !takeover) { // a pinned full page stays even when an alert fires
 		name = pin // pinned from the UI: hold this page (its own screens still roll); alerts still win
 		if p.name == pin {
 			sub = p.sub
-			if skip || now.Sub(p.enteredAt) >= dwell(name, sub, subPages(name, s)) {
+			if subs := subPages(name, s); now.Sub(p.enteredAt) >= dwell(name, sub, subs) {
 				p.enteredAt = now
-				sub = (sub + 1) % subPages(name, s)
+				sub = (sub + 1) % subs
 			}
 		} else {
 			p.enteredAt = now
 		}
-	} else if take && len(list) > 0 {
+	} else if takeover {
 		name = "alerts"
 	} else {
-		cur := -1
-		for i, n := range names {
-			if n == p.name {
-				cur = i
-			}
-		}
-		if cur < 0 && isFull(p.name) && now.Sub(p.enteredAt) < 10*time.Second {
+		cur := slices.Index(names, p.name)
+		if cur < 0 && isFull(p.name) && now.Sub(p.enteredAt) < minFull {
 			name, sub = p.name, p.sub // a full page stays at least 10 s even if its reason just went away
 		} else if cur < 0 {
 			name, p.enteredAt = names[0], now
 		} else {
 			name, sub = p.name, p.sub
-			if skip || now.Sub(p.enteredAt) >= dwell(name, sub, subPages(name, s)) {
+			if subs := subPages(name, s); now.Sub(p.enteredAt) >= dwell(name, sub, subs) {
 				p.enteredAt = now
-				if sub+1 < subPages(name, s) {
+				if sub+1 < subs {
 					sub++
 				} else {
 					name, sub = names[(cur+1)%len(names)], 0
@@ -365,7 +366,6 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 			}
 		}
 	}
-	var out [][]byte
 	changed := name != p.name || sub != p.sub
 	if changed && (isRoll(name) || name == "settings") && name == p.name { // rolling / settings sub-pages: just diff the rows, no full clear
 		p.sub, changed = sub, false
@@ -375,55 +375,39 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		if name == "alerts" && take {
 			p.enteredAt = now
 		}
-		p.shown = map[byte]cell{}
 		p.full = isFull(name)
-		p.pending = [][]byte{screenFrame(screenMode(name, true))} // full pages clear the screen on entry
-		if !p.full {
-			p.pending = append(p.pending, bandFrame(0, 0, maxSev, true, true))
-		}
+		p.newScreen(screenMode(name, true), maxSev) // full pages clear the screen on entry
 		p.lastFull = now
 	} else if now.Sub(p.lastFull) >= 10*time.Second {
-		p.shown = map[byte]cell{}
-		p.pending = append([][]byte{screenFrame(screenMode(p.name, false)), pageFrame(menuSlot(p.name), cfg().Pin == p.name)}, p.pending...) // self-heal if the Mega missed the switch
+		clear(p.shown)
+		p.pending = append([][]byte{screenFrame(screenMode(p.name, false)), pageFrame(menuSlot(p.name), held == p.name)}, p.pending...) // self-heal if the Mega missed the switch
 		p.lastFull = now
-	}
-	if name != "settings" && name != "alerts" && name != "" {
-		p.lastView = name
 	}
 	if p.repaint { // the menu was drawn over this screen: repaint it fully, then every cell again
 		p.repaint = false
-		p.shown = map[byte]cell{}
-		p.pending = [][]byte{screenFrame(screenMode(name, true) | 0x40)}
-		if !p.full {
-			p.pending = append(p.pending, bandFrame(0, 0, maxSev, true, true))
-		}
+		p.newScreen(screenMode(name, true)|0x40, maxSev)
 		p.lastBand, p.lastFull = [4]int{-1}, now
 	}
 	if p.resend { // the board repainted itself (menu closed / calibrated)
 		p.resend = false
-		p.shown, p.pending = map[byte]cell{}, nil
+		clear(p.shown)
+		p.pending = nil
 		p.lastBand, p.lastFull = [4]int{-1}, now
 	}
-	pinned := cfg().Pin == name && name != ""
+	pinned := held == name && name != ""
 	if slot := int(menuSlot(name)) | b2i(pinned)<<8; slot != p.sentSlot {
 		p.sentSlot = slot
 		p.pending = append(p.pending, pageFrame(menuSlot(name), pinned))
 	}
-	idx := 0
-	for i, n := range names {
-		if n == name {
-			idx = i
-		}
-	}
+	idx := max(0, slices.Index(names, name))
 	border := maxSev < sevCrit || now.Second()%2 == 0
 	key := [4]int{idx, len(names), maxSev, b2i(border)}
 	if !p.full && (key != p.lastBand || now.Sub(p.lastBandT) >= 10*time.Second || changed) {
 		p.lastBand, p.lastBandT = key, now
 		p.pending = append(p.pending, bandFrame(idx, len(names), maxSev, false, border)) // queued, so it lands after a screen switch
 	}
-	want := p.build(name, sub, s, list, take, since, now)
-	have := map[byte]bool{}
-	for _, c := range want {
+	var have [256]bool
+	for _, c := range p.build(name, sub, s, list, take, since, now) {
 		have[c.slot] = true
 		if old, ok := p.shown[c.slot]; !ok || !similar(old, c) {
 			p.shown[c.slot] = c
@@ -437,16 +421,25 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		}
 	}
 	if now.Before(p.hold) {
-		return out
+		return nil
 	}
 	n := min(3, len(p.pending)) // pacing: the Mega draws slowly and has a small RX buffer
 	if n > 0 && p.pending[0][2] == frameScreen {
 		n = 1 // clearing / repainting the screen takes a while: let it finish before sending rows
 		p.hold = now.Add(700 * time.Millisecond)
 	}
-	out = append(out, p.pending[:n]...)
+	out := p.pending[:n:n]
 	p.pending = p.pending[n:]
 	return out
+}
+
+// newScreen forgets what the board shows and queues a fresh screen: the mode frame first, then (dashboard) a cleared band.
+func (p *panel) newScreen(mode byte, sev int) {
+	clear(p.shown)
+	p.pending = [][]byte{screenFrame(mode)}
+	if !p.full {
+		p.pending = append(p.pending, bandFrame(0, 0, sev, true, true))
+	}
 }
 
 func b2i(b bool) int {
@@ -458,7 +451,7 @@ func b2i(b bool) int {
 
 // buildFull lays out a full-screen page: row 0 is the title, rows 1..9 the content.
 func (p *panel) buildFull(name string, sub int, s *snapshot) []cell {
-	var cs []cell
+	cs := make([]cell, 0, 10) // title + 9 rows
 	row := func(i int, style byte, pct int, label, val string) {
 		cs = append(cs, cell{byte(i), style, byte(min(max(pct, 0), 100)), label + "\t" + val})
 	}

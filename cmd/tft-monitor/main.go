@@ -39,56 +39,41 @@ func cpuTimes() (idle, total uint64) {
 	return
 }
 
-// memPct returns RAM and swap usage in percent.
-// memBytes returns RAM in use and swap in use / total, in bytes.
-func memBytes() (ramUsed, swapUsed, swapTotal float64) {
-	var total, avail, swTotal, swFree float64
-	for _, l := range strings.Split(readFile("/proc/meminfo"), "\n") {
-		f := strings.Fields(l)
-		if len(f) < 2 {
-			continue
-		}
-		v, _ := strconv.ParseFloat(f[1], 64)
-		switch f[0] {
-		case "MemTotal:":
-			total = v
-		case "MemAvailable:":
-			avail = v
-		case "SwapTotal:":
-			swTotal = v
-		case "SwapFree:":
-			swFree = v
-		}
-	}
-	return (total - avail) * 1024, (swTotal - swFree) * 1024, swTotal * 1024
+type memInfo struct {
+	ram, swap                    int     // percent in use
+	ramUsed, swapUsed, swapTotal float64 // bytes
 }
 
-func memPct() (ram, swap int) {
+// readMem reads /proc/meminfo once: RAM and swap in use, in percent and in bytes.
+func readMem() (m memInfo) {
 	var total, avail, swTotal, swFree float64
 	for _, l := range strings.Split(readFile("/proc/meminfo"), "\n") {
-		f := strings.Fields(l)
-		if len(f) < 2 {
+		k, rest, _ := strings.Cut(l, ":")
+		var dst *float64
+		switch k {
+		case "MemTotal":
+			dst = &total
+		case "MemAvailable":
+			dst = &avail
+		case "SwapTotal":
+			dst = &swTotal
+		case "SwapFree":
+			dst = &swFree
+		default:
 			continue
 		}
-		v, _ := strconv.ParseFloat(f[1], 64)
-		switch f[0] {
-		case "MemTotal:":
-			total = v
-		case "MemAvailable:":
-			avail = v
-		case "SwapTotal:":
-			swTotal = v
-		case "SwapFree:":
-			swFree = v
+		if f := strings.Fields(rest); len(f) > 0 {
+			*dst, _ = strconv.ParseFloat(f[0], 64)
 		}
 	}
 	if total > 0 {
-		ram = int(100*(total-avail)/total + 0.5)
+		m.ram = int(100*(total-avail)/total + 0.5)
 	}
 	if swTotal > 0 {
-		swap = int(100*(swTotal-swFree)/swTotal + 0.5)
+		m.swap = int(100*(swTotal-swFree)/swTotal + 0.5)
 	}
-	return
+	m.ramUsed, m.swapUsed, m.swapTotal = (total-avail)*1024, (swTotal-swFree)*1024, swTotal*1024
+	return m
 }
 
 // loadAvg returns the 1/5/15 minute load averages times 100.
@@ -190,8 +175,6 @@ func disks() []disk {
 	return out[:min(len(out), 8)]
 }
 
-func gpuSm(e *ema, v int, alpha float64) int { return e.add(float64(v), alpha) }
-
 // ema is an exponential moving average; alpha closer to 0 = smoother.
 type ema struct {
 	v    float64
@@ -209,17 +192,14 @@ func (e *ema) add(x, alpha float64) int {
 
 type gpuInfo struct{ util, temp, vram, watts, limit int }
 
-func queryGPU() gpuInfo {
-	out, err := exec.Command("nvidia-smi", "--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,enforced.power.limit",
-		"--format=csv,noheader,nounits").Output()
-	if err != nil {
-		return gpuInfo{}
-	}
-	f := strings.Split(strings.TrimSpace(string(out)), ",")
+// parseGPU reads one line of nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total,
+// power.draw,enforced.power.limit --format=csv,noheader,nounits.
+func parseGPU(line string) gpuInfo {
+	f := strings.Split(strings.TrimSpace(line), ",")
 	if len(f) < 6 {
 		return gpuInfo{}
 	}
-	n := make([]float64, 6)
+	var n [6]float64
 	for i := range n {
 		n[i], _ = strconv.ParseFloat(strings.TrimSpace(f[i]), 64)
 	}
@@ -227,6 +207,56 @@ func queryGPU() gpuInfo {
 		return gpuInfo{}
 	}
 	return gpuInfo{int(n[0]), int(n[1]), int(100*n[2]/n[3] + 0.5), int(n[4] + 0.5), int(n[5] + 0.5)}
+}
+
+// gpuReader keeps one nvidia-smi running that prints a sample every second (-lms), instead of starting a new one
+// every second: starting nvidia-smi costs ~30-50 ms of CPU and blocked the run loop while it ran.
+type gpuReader struct {
+	mu   sync.Mutex
+	last gpuInfo
+	at   time.Time
+}
+
+func startGPU() *gpuReader {
+	g := &gpuReader{}
+	go func() {
+		for {
+			g.watch()
+			time.Sleep(5 * time.Second) // not installed, or it died: try again later
+		}
+	}()
+	return g
+}
+
+func (g *gpuReader) watch() {
+	cmd := exec.Command("nvidia-smi", "--id=0", "--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,enforced.power.limit",
+		"--format=csv,noheader,nounits", "-lms", "1000")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL} // never outlive the daemon
+	out, err := cmd.StdoutPipe()
+	if err != nil || cmd.Start() != nil {
+		return
+	}
+	stall := time.AfterFunc(10*time.Second, func() { cmd.Process.Kill() }) // a hung nvidia-smi is restarted
+	sc := bufio.NewScanner(out)
+	for sc.Scan() {
+		stall.Reset(10 * time.Second)
+		gi := parseGPU(sc.Text())
+		g.mu.Lock()
+		g.last, g.at = gi, time.Now()
+		g.mu.Unlock()
+	}
+	stall.Stop()
+	cmd.Wait()
+}
+
+// get returns the newest sample (zero when there is none from the last few seconds, as with no GPU).
+func (g *gpuReader) get() gpuInfo {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if time.Since(g.at) > 3*time.Second {
+		return gpuInfo{}
+	}
+	return g.last
 }
 
 func memTotalBytes() float64 {
@@ -239,6 +269,15 @@ func memTotalBytes() float64 {
 	return 1
 }
 
+// kbps is the rate between two byte counters read dt seconds apart, in kbit/s (SI: 1 kbit = 1000 bit). A counter that
+// went backwards (a network card went away, or its driver was reloaded) counts as no traffic, not as a wrapped uint64.
+func kbps(cur, prev uint64, dt float64) int {
+	if cur < prev {
+		return 0
+	}
+	return int(float64(cur-prev) * 8 / 1000 / dt)
+}
+
 var wmu sync.Mutex
 var byeFn atomic.Value // func(), set while a serial port is open
 
@@ -246,6 +285,7 @@ var (
 	collectors *bg
 	eng        *engine
 	pan        *panel
+	gpus       *gpuReader
 )
 
 func run(port serial.Port, cpuT string) error {
@@ -253,7 +293,7 @@ func run(port serial.Port, cpuT string) error {
 	rx0, tx0 := netBytes()
 	tNet := time.Now() // when rx0/tx0 were read: the rate is bytes between two reads over the time between those same reads
 	t0 := time.Now()
-	gpu := queryGPU()
+	var gpu gpuInfo // read on the first tick (n%4 == 1)
 	var eCPU, eCPUT, eGPU, eGPUT, eGPUW ema
 	var lastC []byte
 	var lastCT time.Time
@@ -271,11 +311,12 @@ func run(port serial.Port, cpuT string) error {
 		return summaryFrame(uint32(uptime), uint32(en.Wh*10+0.5), [5]int{en.PeakCPU, en.PeakGPU, en.PeakCT, en.PeakGT, en.avgCPU()}, rx/1_000_000, tx/1_000_000, d) // decimal MB
 	}
 	pan.name, pan.shown, pan.pending = "", map[byte]cell{}, nil
+	verbose := os.Getenv("TFT_VERBOSE") != ""
 	send := func(b []byte) error {
 		wmu.Lock()
 		defer wmu.Unlock()
 		_, err := port.Write(b)
-		if os.Getenv("TFT_VERBOSE") != "" {
+		if verbose {
 			fmt.Printf("% x\n", b)
 		}
 		return err
@@ -304,7 +345,7 @@ func run(port serial.Port, cpuT string) error {
 			if ev, ok := parseTouch(line); ok {
 				queueTouch(ev)
 			}
-			if os.Getenv("TFT_VERBOSE") != "" {
+			if verbose {
 				fmt.Print("board: ", line)
 			}
 		}
@@ -333,10 +374,10 @@ func run(port serial.Port, cpuT string) error {
 				lastC, lastCT = c, now
 			}
 		}
-		if n%4 == 1 { // nvidia-smi once a second is plenty
-			gpu = queryGPU()
-			gpu.util, gpu.temp = gpuSm(&eGPU, gpu.util, 0.5), gpuSm(&eGPUT, gpu.temp, 0.4)
-			gpu.watts = gpuSm(&eGPUW, gpu.watts, 0.5)
+		if n%4 == 1 { // nvidia-smi samples once a second
+			gpu = gpus.get()
+			gpu.util, gpu.temp = eGPU.add(float64(gpu.util), 0.5), eGPUT.add(float64(gpu.temp), 0.4)
+			gpu.watts = eGPUW.add(float64(gpu.watts), 0.5)
 			snap.gpuW, snap.gpuLimit = gpu.watts, gpu.limit
 		}
 		idle, tot := cpuTimes()
@@ -346,17 +387,16 @@ func run(port serial.Port, cpuT string) error {
 		}
 		idle0, tot0 = idle, tot
 		en.add(now, dt, cpu, gpu.watts)
-		snap.pcW, snap.whBoot = int(en.pcW+0.5), en.Wh
 		cpu = eCPU.add(float64(cpu), 0.5)
 		rx, tx := netBytes()
 		tn := time.Now()
 		dtn := max(tn.Sub(tNet).Seconds(), 0.05)
-		down, up := int(float64(rx-rx0)*8/1000/dtn), int(float64(tx-tx0)*8/1000/dtn) // kbit/s (SI: 1 kbit = 1000 bit)
+		down, up := kbps(rx, rx0, dtn), kbps(tx, tx0, dtn)
 		rx0, tx0, tNet = rx, tx, tn
-		nh.update(now, rx, tx, down, up)
+		nh.update(now, rx, tx)
 		snap.downAvg, snap.upAvg = int(avgDown.add(float64(down))), int(avgUp.add(float64(up)))
-		snap.netRx, snap.netTx, snap.down, snap.up = rx, tx, down, up
-		snap.netRxH, snap.netTxH, snap.peakDown, snap.peakUp = nh.hour(rx, tx)
+		snap.netRx, snap.netTx = rx, tx
+		snap.netRxH, snap.netTxH = nh.hour(rx, tx)
 		temp := 0
 		if cpuT != "" {
 			t, _ := strconv.Atoi(strings.TrimSpace(readFile(cpuT)))
@@ -364,8 +404,9 @@ func run(port serial.Port, cpuT string) error {
 		}
 		upS, _, _ := strings.Cut(readFile("/proc/uptime"), ".")
 		uptime, _ = strconv.ParseUint(upS, 10, 32)
-		ram, swap := memPct()
-		snap.ramUsed, snap.swapUsed, snap.swapTotal = memBytes()
+		mem := readMem()
+		ram, swap := mem.ram, mem.swap
+		snap.ramUsed, snap.swapUsed, snap.swapTotal = mem.ramUsed, mem.swapUsed, mem.swapTotal
 		load := loadAvg()
 		snap.cpu, snap.ram, snap.swap, snap.cpuT = cpu, ram, swap, temp
 		snap.gpu, snap.gpuT, snap.vram, snap.load = gpu.util, gpu.temp, gpu.vram, load
@@ -423,7 +464,7 @@ func main() {
 		log.Fatalf("unknown command %q (use: install, uninstall, notify)", cmd)
 	}
 	cpuT := cpuTempFile()
-	collectors, eng, pan = startCollectors(), newEngine(), newPanel()
+	collectors, eng, pan, gpus = startCollectors(), newEngine(), newPanel(), startGPU()
 	loadCfg()
 	listenNotify(eng)
 	listenCtl(eng)

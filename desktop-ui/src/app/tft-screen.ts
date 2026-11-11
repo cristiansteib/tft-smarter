@@ -4,6 +4,7 @@ import { Api, Cell, State } from './api';
 const PAL = ['#eaf0f8', '#8a9bb4', '#27d6b4', '#ffb020', '#ff8a3d', '#ff5560', '#4fe6ff', '#4aa8ff', '#b48cff'];
 const DARK = '#1c2636';
 const SEGS = 30;
+const NET_STEPS = [100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000];
 
 interface Seg { d: string; on: boolean }
 
@@ -14,9 +15,15 @@ function arc(cx: number, cy: number, ro: number, ri: number, i: number): string 
   return `M${p(ro, a0)} A${ro},${ro} 0 0 1 ${p(ro, a1)} L${p(ri, a1)} A${ri},${ri} 0 0 0 ${p(ri, a0)} Z`;
 }
 
+/** the 30 segment outlines of a ring never change: work them out once per ring */
+const rings = new Map<string, string[]>();
+
 function segs(cx: number, cy: number, ro: number, ri: number, v: number): Seg[] {
+  const key = `${cx},${cy},${ro},${ri}`;
+  let paths = rings.get(key);
+  if (!paths) rings.set(key, (paths = Array.from({ length: SEGS }, (_, i) => arc(cx, cy, ro, ri, i))));
   const lit = Math.floor((Math.min(Math.max(v, 0), 100) * SEGS) / 100);
-  return Array.from({ length: SEGS }, (_, i) => ({ d: arc(cx, cy, ro, ri, i), on: i < lit }));
+  return paths.map((d, i) => ({ d, on: i < lit }));
 }
 
 const level = (v: number, warn: number, crit: number, ok = PAL[2]) => (v >= crit ? PAL[5] : v >= warn ? PAL[3] : ok);
@@ -53,16 +60,16 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
             <text x="26" y="170" fill="#8a9bb4" font-size="9">Traffic</text>
             <text x="80" y="170" fill="#27d6b4" font-size="9">down</text><text x="112" y="170" fill="#ff8a3d" font-size="9">up</text>
             <rect x="25" y="172" width="432" height="77" fill="none" stroke="#29384f" />
-            <polyline [attr.points]="netTrace('up')" fill="none" stroke="#ff8a3d" stroke-width="2" />
-            <polyline [attr.points]="netTrace('down')" fill="none" stroke="#27d6b4" stroke-width="2" />
+            <polyline [attr.points]="netTrace().up" fill="none" stroke="#ff8a3d" stroke-width="2" />
+            <polyline [attr.points]="netTrace().down" fill="none" stroke="#27d6b4" stroke-width="2" />
           }
           @if (st.panel.page === 'rollcpu') {
             <text x="26" y="170" fill="#9aa3ad" font-size="9">LOAD HISTORY</text>
             <text x="98" y="170" fill="#4fe6ff" font-size="9">CPU</text><text x="122" y="170" fill="#b48cff" font-size="9">GPU</text>
             <rect x="25" y="172" width="432" height="96" fill="none" stroke="#29384f" />
             <line x1="26" y1="220" x2="456" y2="220" stroke="#29384f" />
-            <polyline [attr.points]="trace('gpu')" fill="none" stroke="#b48cff" stroke-width="2" />
-            <polyline [attr.points]="trace('cpu')" fill="none" stroke="#4fe6ff" stroke-width="2" />
+            <polyline [attr.points]="loadTrace().gpu" fill="none" stroke="#b48cff" stroke-width="2" />
+            <polyline [attr.points]="loadTrace().cpu" fill="none" stroke="#4fe6ff" stroke-width="2" />
           }
         } @else {
         <rect width="480" height="22" fill="#14181f" />
@@ -107,17 +114,19 @@ export class TftScreen {
   private api = inject(Api);
 
   /** download / upload trace, scaled to the window's peak like the board does (1-3-10 steps from 100 kbit/s) */
-  netTrace(k: 'down' | 'up') {
+  netTrace = computed(() => {
     const h = this.api.history();
     const peak = Math.max(1, ...h.map((x) => Math.max(x.down, x.up)));
-    const steps = [100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000];
-    const step = steps.find((s) => s >= peak) ?? 10000000;
-    return h.map((x, i) => `${26 + i * 5},${244 - (x[k] * 70) / step}`).join(' ');
-  }
+    const step = NET_STEPS.find((s) => s >= peak) ?? 10000000;
+    const line = (k: 'down' | 'up') => h.map((x, i) => `${26 + i * 5},${244 - (x[k] * 70) / step}`).join(' ');
+    return { down: line('down'), up: line('up') };
+  });
 
-  trace(k: 'cpu' | 'gpu') {
-    return this.api.history().map((h, i) => `${26 + i * 5},${264 - (h[k] * 88) / 100}`).join(' ');
-  }
+  loadTrace = computed(() => {
+    const h = this.api.history();
+    const line = (k: 'cpu' | 'gpu') => h.map((x, i) => `${26 + i * 5},${264 - (x[k] * 88) / 100}`).join(' ');
+    return { cpu: line('cpu'), gpu: line('gpu') };
+  });
 
   up = computed(() => {
     const u = this.s()?.gauges.uptime ?? 0;

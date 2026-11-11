@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"maps"
+	"strings"
 	"time"
 )
 
@@ -72,8 +74,8 @@ func settingValue(it sitem, c settings) (string, byte) {
 	case "ram":
 		return stepper(fmt.Sprintf("%d%%", c.RamTrigger)), pCyan
 	}
-	if len(it.key) > 3 && it.key[:3] == "pg:" {
-		return onOff(!c.Disabled[it.key[3:]])
+	if pg, ok := strings.CutPrefix(it.key, "pg:"); ok {
+		return onOff(!c.Disabled[pg])
 	}
 	return "", pGrey
 }
@@ -106,42 +108,27 @@ func (p *panel) touchSettings(x, y int, now time.Time) {
 		return
 	}
 	it := items[row-1]
-	c := cfg()
-	switch it.kind {
-	case 't', 'a':
-		// the whole row is the button
-	case 's':
-		if x < 300 {
-			return
-		}
+	if it.kind == 's' && x < 300 { // toggles and actions: the whole row is the button; steppers: only the value
+		return
 	}
-	plus := x >= 390
-	step := func(v *float64, d float64) {
-		if plus {
-			*v += d
-		} else {
-			*v -= d
-		}
+	c := cfg()
+	sign := -1 // steppers: the left half of the value decreases, the right half increases
+	if x >= 390 {
+		sign = 1
 	}
 	switch it.key {
 	case "return":
-		d := float64(c.ReturnSec)
-		step(&d, 15)
-		c.ReturnSec = int(d)
+		c.ReturnSec += 15 * sign
 	case "dwell":
-		d := float64(c.DwellSec)
-		step(&d, 1)
-		c.DwellSec = int(d)
+		c.DwellSec += sign
 	case "hogCpu":
-		step(&c.HogCPU, 5)
+		c.HogCPU += 5 * float64(sign)
 	case "load":
-		step(&c.LoadTrigger, 5)
+		c.LoadTrigger += 5 * float64(sign)
 	case "hogMem":
-		step(&c.HogMem, 1)
+		c.HogMem += float64(sign)
 	case "ram":
-		r := float64(c.RamTrigger)
-		step(&r, 5)
-		c.RamTrigger = int(r)
+		c.RamTrigger += 5 * sign
 	case "cal":
 		p.pending = append(p.pending, cmdFrame(cmdCalibrate))
 		return
@@ -149,8 +136,9 @@ func (p *panel) touchSettings(x, y int, now time.Time) {
 		p.repaint = true
 		return
 	default:
-		if len(it.key) > 3 && it.key[:3] == "pg:" {
-			c.Disabled[it.key[3:]] = !c.Disabled[it.key[3:]]
+		if pg, ok := strings.CutPrefix(it.key, "pg:"); ok {
+			c.Disabled = maps.Clone(c.Disabled) // cfg()'s map is shared: change a copy
+			c.Disabled[pg] = !c.Disabled[pg]
 		}
 	}
 	setCfg(c)

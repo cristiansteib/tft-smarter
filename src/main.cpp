@@ -119,28 +119,6 @@ static int W, H;
 static void menuBar();   // the bottom menu strip, defined with the touch code
 static void claudeLogo(int cx, int cy, int r);
 
-#ifdef PERF   // timing instrumentation: build with -DPERF, prints "perf ..." lines every 5 s
-struct PerfAcc { uint32_t sum, mx; uint16_t n; };
-static PerfAcc pf[6];   // 0 redraw, 1 cell, 2 line, 3 screen, 4 claude, 5 loop pass
-static const char *const PF_N[6] = {"redraw", "cell", "line", "screen", "claude", "pass"};
-static void perfAdd(uint8_t i, uint32_t us) { PerfAcc &a = pf[i]; a.sum += us; a.n++; if (us > a.mx) a.mx = us; }
-static void perfPrint() {
-  Serial.print(F("perf"));
-  for (uint8_t i = 0; i < 6; i++) {
-    if (!pf[i].n) continue;
-    Serial.print(' '); Serial.print(PF_N[i]); Serial.print('=');
-    Serial.print(pf[i].sum / pf[i].n / 100); Serial.print('/'); Serial.print(pf[i].mx / 100); Serial.print('x'); Serial.print(pf[i].n);
-  }
-  Serial.println(F(" (avg/max in 0.1ms, x count)"));
-  memset(pf, 0, sizeof pf);
-}
-#define PERF_T0 uint32_t _pt0 = micros()
-#define PERF_END(i) perfAdd(i, micros() - _pt0)
-#else
-#define PERF_T0
-#define PERF_END(i)
-#endif
-
 // ---- text measuring (same numbers as Adafruit_GFX getTextBounds) ----
 struct Ext { int16_t x0, x1, y0, y1; };    // pixel bounding box, inclusive; x0 > x1 when nothing is drawn
 static Ext textExt(const GFXfont *f, const char *s, int16_t x, int16_t base) {
@@ -174,6 +152,11 @@ static uint16_t textW(const GFXfont *f, const char *t) { Ext e = textExt(f, t, 0
 static void put(const GFXfont *f, uint16_t col, int x, int base, const char *t, uint8_t align = 0) {
   tft.setFont(f); tft.setTextSize(1); tft.setTextColor(col);
   if (align) x -= align == 1 ? textW(f, t) / 2 : textW(f, t);
+  tft.setCursor(x, base); tft.print(t);
+  tft.setFont();
+}
+static void put(const GFXfont *f, uint16_t col, int x, int base, const __FlashStringHelper *t) {   // left-aligned text from flash
+  tft.setFont(f); tft.setTextSize(1); tft.setTextColor(col);
   tft.setCursor(x, base); tft.print(t);
   tft.setFont();
 }
@@ -413,6 +396,8 @@ struct Stats {
 static uint32_t lastRx;
 static bool online = false;
 
+static uint16_t swapColor(uint8_t v) { return v >= 60 ? RED : v >= 25 ? ORANGE : SWAP_OK; }
+static uint16_t tempColor(uint8_t t, uint8_t warn) { return t >= 80 ? RED : t >= warn ? ORANGE : TEMP_OK; }
 static uint16_t levelColor(uint8_t v, uint8_t warn = 60, uint8_t crit = 85) {
   return v >= crit ? RED : v >= warn ? YELLOW : GREEN;
 }
@@ -556,6 +541,8 @@ static void segment(const Gauge &g, int i, uint16_t c) {
   pump();
 }
 
+static uint16_t gaugeColor(const Gauge &g, uint8_t v) { return v >= g.crit ? RED : v >= g.warn ? g.cWarn : g.cOk; }
+
 static void gaugeFrame(Gauge &g) {
   for (int i = 0; i < SEGS; i++) segment(g, i, DARK);
   if (g.label) {
@@ -571,7 +558,7 @@ static void gaugeUpdate(Gauge &g, uint8_t v, uint8_t cv) {
   if (cv == g.val) return;
   g.val = cv;
   uint8_t lit = (uint16_t)v * SEGS / 100;
-  uint16_t col = cv >= g.crit ? RED : cv >= g.warn ? g.cWarn : g.cOk;
+  uint16_t col = gaugeColor(g, cv);
   if (col != g.col) {
     for (int i = 0; i < lit; i++) segment(g, i, col);
     for (int i = lit; i < g.lit; i++) segment(g, i, DARK);
@@ -585,8 +572,8 @@ static void gaugeUpdate(Gauge &g, uint8_t v, uint8_t cv) {
 
 // the big percentage in the middle of a load gauge: only the columns of the old and new number are repainted
 static void gaugeLabel(Gauge &g, uint8_t v) {
-  char b[8]; snprintf(b, sizeof b, "%d", v);
-  uint16_t col = v >= g.crit ? RED : v >= g.warn ? g.cWarn : g.cOk;
+  char b[8]; snprintf_P(b, sizeof b, PSTR("%d"), v);
+  uint16_t col = gaugeColor(g, v);
   uint16_t sig = sigOf(b, col);
   if (sig == g.sp.sig) return;
   g.sp.sig = sig;
@@ -601,10 +588,13 @@ static void gaugeLabel(Gauge &g, uint8_t v) {
 static uint8_t tempPct(uint8_t t) { return t <= 20 ? 0 : t >= 100 ? 100 : (t - 20) * 100 / 80; }
 
 // ---- helpers ----
-static void panelTitle(int x, int y, const char *s) {
+static void panelTitle(int x, int y, const __FlashStringHelper *s) {
   tft.setTextSize(1); tft.setTextColor(GREY);
   tft.setCursor(x, y); tft.print(s);
 }
+// the i-th string of a PROGMEM list of NUL-separated strings
+static PGM_P nthP(PGM_P s, uint8_t i) { while (i--) s += strlen_P(s) + 1; return s; }
+#define FS(p) ((const __FlashStringHelper *)(p))
 
 // ---- info panel (bottom band): the PC lays out cells and pages, we only draw ----
 #define PX 28
@@ -706,11 +696,11 @@ static void drawLine(const uint8_t *p, uint8_t len) {
       if (fill > 0) bxRect(bx + 2, y + 9, fill, 8, col);
       bxText(&FreeSansBold12pt7b, col, bx + bw + 10, base, val);
       if (sub) {                                             // thin swap bar under the RAM bar
-        uint16_t sc = swp >= 60 ? RED : swp >= 25 ? ORANGE : SWAP_OK;
+        uint16_t sc = swapColor(swp);
         bxRect(bx, y + 26, bw, 4, DARK);
         if (swp) bxRect(bx + 1, y + 27, (long)(bw - 2) * swp / 100, 2, sc);
         bxText(nullptr, sc, 14, y + 24, "swap");
-        snprintf(sw, sizeof sw, "%u%%", swp);
+        snprintf_P(sw, sizeof sw, PSTR("%u%%"), swp);
         bxText(nullptr, sc, bx + bw + 10, y + 25, sw);
       }
     } else {
@@ -754,13 +744,10 @@ static void drawPanelItem() {
   if (!qn) return;
   Item it = q[qh];
   qh = (qh + 1) % 6; qn--;
-  PERF_T0;
-  if (it.type == 8) {                      // screen switch: 0 dashboard, 1 full page, 2 full page + clear
-    setScreen(it.d[0]);
-    PERF_END(3);
-  } else if (it.type == 9) { if (pageMode) { drawLine(it.d, it.len); PERF_END(2); } }   // full-screen row
+  if (it.type == 8) setScreen(it.d[0]);    // screen switch: 0 dashboard, 1 full page, 2 full page + clear
+  else if (it.type == 9) { if (pageMode) drawLine(it.d, it.len); }   // full-screen row
   else if (pageMode) { /* band/cell frames are stale while a full page is up */ }
-  else if (it.type == 5) { drawCell(it.d, it.len); PERF_END(1); }
+  else if (it.type == 5) drawCell(it.d, it.len);
   else drawBand(it.d, it.len);
 }
 
@@ -773,7 +760,6 @@ static void drawPanelItems(uint16_t budgetMs) {
 // ---- small text under the gauges (temperatures, VRAM) ----
 static Span spNote[3], spLoad, spVram;
 
-static uint16_t tempColor(uint8_t t, uint8_t warn) { return t >= 80 ? RED : t >= warn ? ORANGE : TEMP_OK; }
 
 static void note(Span &sp, const Gauge &g, const char *b, uint16_t col) {   // small centred text under the %
   uint16_t sig = sigOf(b, col);
@@ -791,12 +777,12 @@ static void gaugeNotes() {
   gaugeUpdate(T[1], tempPct(st.gpuT), st.gpuT);
   gaugeUpdate(T[2], st.swap, st.swap);
   gaugeUpdate(T[3], wp, wp);
-  snprintf(b, sizeof b, "%dC", st.cpuT);
+  snprintf_P(b, sizeof b, PSTR("%dC"), st.cpuT);
   note(spNote[0], G[0], b, tempColor(st.cpuT, 60));
-  snprintf(b, sizeof b, "%dC", st.gpuT);
+  snprintf_P(b, sizeof b, PSTR("%dC"), st.gpuT);
   note(spNote[1], G[2], b, tempColor(st.gpuT, 65));
-  snprintf(b, sizeof b, "sw %d%%", st.swap);
-  note(spNote[2], G[1], b, st.swap >= 60 ? RED : st.swap >= 25 ? ORANGE : SWAP_OK);
+  snprintf_P(b, sizeof b, PSTR("sw %d%%"), st.swap);
+  note(spNote[2], G[1], b, swapColor(st.swap));
   pump();
   {                                                    // 1 and 5 min load inside the CPU gauge, above the %
     uint32_t per = (uint32_t)st.load[0] * 100 / st.ncpu;   // 1-min load per core, percent
@@ -804,10 +790,10 @@ static void gaugeNotes() {
     char ip[2][6], dp[2][4];
     for (int i = 0; i < 2; i++) {
       uint16_t t = (st.load[i] + 5) / 10;                 // tenths, rounded
-      snprintf(ip[i], sizeof ip[i], "%u", t / 10);
-      snprintf(dp[i], sizeof dp[i], t < 100 ? ".%u" : "", t % 10);   // decimal only while there is room
+      snprintf_P(ip[i], sizeof ip[i], PSTR("%u"), t / 10);
+      snprintf_P(dp[i], sizeof dp[i], t < 100 ? PSTR(".%u") : PSTR(""), t % 10);   // decimal only while there is room
     }
-    snprintf(b, sizeof b, "%s%s %s%s", ip[0], dp[0], ip[1], dp[1]);
+    snprintf_P(b, sizeof b, PSTR("%s%s %s%s"), ip[0], dp[0], ip[1], dp[1]);
     uint16_t sig = sigOf(b, col);
     if (sig != spLoad.sig) {
       spLoad.sig = sig;
@@ -829,8 +815,8 @@ static void gaugeNotes() {
   pump();
   {
     char v[12], wt[8];
-    snprintf(v, sizeof v, "VRAM %d%%", st.vram);
-    snprintf(wt, sizeof wt, "%uW", st.gpuW);
+    snprintf_P(v, sizeof v, PSTR("VRAM %d%%"), st.vram);
+    snprintf_P(wt, sizeof wt, PSTR("%uW"), st.gpuW);
     uint16_t cv = levelColor(st.vram, 70, 90), cw = wp >= 98 ? RED : wp >= 85 ? ORANGE : POWER_OK;
     uint16_t sig = sigOf(v, cv) ^ sigOf(wt, cw);
     if (sig != spVram.sig) {
@@ -848,10 +834,10 @@ static void gaugeNotes() {
 extern uint32_t shownD, shownU;   // 3 s averages of the network rates (see netTick)
 // Network rates are bits per second in SI units, like fast.com and speed tests. Same thresholds as fmtBits() in net.go.
 static void fmtRate(char *out, size_t n, uint32_t kbps) {
-  if (kbps < 1000) snprintf(out, n, "%u Kbps", (unsigned)kbps);
-  else if (kbps < 99950UL) { uint32_t t = (kbps + 50) / 100; snprintf(out, n, "%u.%u Mbps", (unsigned)(t / 10), (unsigned)(t % 10)); }
-  else if (kbps < 999500UL) snprintf(out, n, "%u Mbps", (unsigned)((kbps + 500) / 1000));
-  else { uint32_t g = (kbps + 5000) / 10000; snprintf(out, n, "%u.%02u Gbps", (unsigned)(g / 100), (unsigned)(g % 100)); }
+  if (kbps < 1000) snprintf_P(out, n, PSTR("%u Kbps"), (unsigned)kbps);
+  else if (kbps < 99950UL) { uint32_t t = (kbps + 50) / 100; snprintf_P(out, n, PSTR("%u.%u Mbps"), (unsigned)(t / 10), (unsigned)(t % 10)); }
+  else if (kbps < 999500UL) snprintf_P(out, n, PSTR("%u Mbps"), (unsigned)((kbps + 500) / 1000));
+  else { uint32_t g = (kbps + 5000) / 10000; snprintf_P(out, n, PSTR("%u.%02u Gbps"), (unsigned)(g / 100), (unsigned)(g % 100)); }
 }
 
 static Span spUptime, spClock, spDocker, spClaude, spRate[2];
@@ -869,7 +855,7 @@ static void hdrText(Span &sp, int x, int w, const GFXfont *f, uint16_t col, int 
 static void drawHeader() {  // full redraw (on state change)
   tft.fillRect(0, 0, W, 22, PANEL);
   if (!online) {
-    put(&FreeSansBold9pt7b, RED, 28, 16, "No data - start tft-monitor");
+    put(&FreeSansBold9pt7b, RED, 28, 16, F("No data - start tft-monitor"));
   }
   spanReset(spUptime); spanReset(spClock); spanReset(spDocker); spanReset(spClaude);
 }
@@ -877,7 +863,7 @@ static void drawHeader() {  // full redraw (on state change)
 static void updateHeader() {
   if (!online) return;
   uint32_t u = st.uptime;
-  char b[16]; snprintf(b, sizeof b, "up %lud %02luh", u / 86400, (u % 86400) / 3600);
+  char b[16]; snprintf_P(b, sizeof b, PSTR("up %lud %02luh"), u / 86400, (u % 86400) / 3600);
   hdrText(spUptime, 150, 140, &FreeSans9pt7b, GREY, 150, b);
   memcpy(b, st.clock, sizeof st.clock);              // a copy: frames are read while drawing
   hdrText(spClock, W - 80, 80, &FreeSansBold9pt7b, WHITE, W - 12, b, 2);
@@ -915,7 +901,8 @@ static const uint16_t GPU_C[4] = {0xFEFF, MAGENTA, 0x7AF7, 0x398C};
 
 static uint8_t hC[HIST], hG[HIST];
 static uint8_t gPos;
-static uint16_t gTotal;
+static uint16_t gTotal;   // samples drawn so far, saturating: only ever compared with ages below HIST
+static inline void countUp(uint16_t &n) { if (n < 0xFFFF) n++; }
 
 static void graphGrid(int x, int w) {   // redraw background for columns [x, x+w)
   if (x + w > GX + GW + 1) w = GX + GW + 1 - x;
@@ -959,8 +946,6 @@ static void graphFrame(bool labels = true) {
   tft.setCursor(GX - 8, GY + GH - 8); tft.print(F("0"));
 }
 
-static void graphReset() { graphFrame(); gPos = 0; gTotal = 0; }
-
 static inline int gy(uint8_t v) { return GY + GH - 3 - v * (GH - 4) / 100; }
 
 static void drawSeg(const uint8_t *h, int j, uint16_t col) {
@@ -970,53 +955,58 @@ static void drawSeg(const uint8_t *h, int j, uint16_t col) {
   tft.drawLine(x0, y0 + 1, x1, y1 + 1, col);
 }
 
-static void recolor(int ageSamples, int level) {
-  if (gTotal <= ageSamples) return;
-  int j = ((int)gPos - ageSamples + HIST) % HIST;
-  if (j < 1) return;
-  drawSeg(hG, j, GPU_C[level]);
-  drawSeg(hC, j, CPU_C[level]);
+// network scope history (Net page), see netTick()
+static uint32_t nRawD[HIST], nRawU[HIST];      // kbit/s
+static uint8_t nD[HIST], nU[HIST];             // the same, scaled 0..100 for the current full-scale step
+static uint8_t nPos, nScale;
+static uint16_t nTotal;                        // saturating, like gTotal
+static const uint32_t NSTEP[11] = {100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000};   // kbit/s at the top of the chart
+static const uint16_t ND_C[4] = {0xCFFE, GREEN, 0x1CD0, 0x1289};     // download: teal, head to tail
+static const uint16_t NU_C[4] = {0xFF16, ORANGE, 0xBB23, 0x5982};    // upload: orange
+
+// Both scopes are two series over a ring of HIST samples, drawn as a beam: the newest segment bright, older ones
+// fading at AGE1 / AGE2 samples. Load (net = false): GPU under CPU. Network (net = true): upload under download.
+static void traceSeg(bool net, int j, uint8_t level) {   // level: head, normal, fading 1, fading 2
+  if (net) { drawSeg(nU, j, NU_C[level]); drawSeg(nD, j, ND_C[level]); }
+  else     { drawSeg(hG, j, GPU_C[level]); drawSeg(hC, j, CPU_C[level]); }
 }
 
-static void graphPush(uint8_t cpu, uint8_t gpu) {
-  int x = GX + gPos * GSTEP;
-  hC[gPos] = cpu; hG[gPos] = gpu;
-  graphGrid(x + (gPos ? 1 : 0), GSTEP * 3);   // erase gap ahead of the beam
-  if (gPos >= 1 && gTotal >= 1) {
-    drawSeg(hG, gPos, GPU_C[0]);
-    drawSeg(hC, gPos, CPU_C[0]);
-  }
-  recolor(1, 1);
-  recolor(AGE1, 2);
-  recolor(AGE2, 3);
-  gTotal++;
-  if (++gPos >= HIST) gPos = 0;
+static void traceFade(bool net, uint8_t pos, uint16_t total, int age, uint8_t level) {   // the segment `age` samples back
+  if ((int)total <= age) return;
+  int j = ((int)pos - age + HIST) % HIST;
+  if (j >= 1) traceSeg(net, j, level);
+}
+
+// the sample at pos is stored but not yet counted: erase the gap ahead of the beam, draw the head, fade older segments
+static void traceHead(bool net, uint8_t pos, uint16_t total) {
+  graphGrid(GX + pos * GSTEP + (pos ? 1 : 0), GSTEP * 3);
+  if (pos >= 1 && total >= 1) traceSeg(net, pos, 0);
+  traceFade(net, pos, total, 1, 1);
+  traceFade(net, pos, total, AGE1, 2);
+  traceFade(net, pos, total, AGE2, 3);
 }
 
 // repaint the whole trace from the ring buffer (coming back from another screen keeps the history)
-static void graphRepaint() {
-  graphFrame();
+static void traceRepaint(bool net, uint8_t pos, uint16_t total) {
   for (int j = 1; j < HIST; j++) {
-    if (gTotal < HIST && j >= gPos) break;                          // not written yet
-    if (gTotal >= HIST && j >= gPos && j < gPos + 3) continue;      // the gap ahead of the beam
-    int age = ((int)gPos - 1 - j + 2 * HIST) % HIST;                // 0 = newest sample
-    int lv = age == 0 ? 0 : age < AGE1 ? 1 : age < AGE2 ? 2 : 3;
-    drawSeg(hG, j, GPU_C[lv]);
-    drawSeg(hC, j, CPU_C[lv]);
+    if (total < HIST && j >= pos) break;                            // not written yet
+    if (total >= HIST && j >= pos && j < pos + 3) continue;         // the gap ahead of the beam
+    int age = ((int)pos - 1 - j + 2 * HIST) % HIST;                 // 0 = newest sample
+    traceSeg(net, j, age == 0 ? 0 : age < AGE1 ? 1 : age < AGE2 ? 2 : 3);
     pump();
   }
 }
 
-// ---- network scope (Net page): download and upload rates, one sample per 3 s, autoscaled in steps ----
-static uint32_t nRawD[HIST], nRawU[HIST];      // kbit/s
-static uint8_t nD[HIST], nU[HIST];             // the same, scaled 0..100 for the current full-scale step
-static uint8_t nPos, nScale;
-static uint16_t nTotal;
-static const uint32_t NSTEP[11] = {100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000, 3000000, 10000000};   // kbit/s at the top of the chart
-static const char *const NLABEL[11] = {"100 Kbps", "300 Kbps", "1 Mbps", "3 Mbps", "10 Mbps", "30 Mbps", "100 Mbps", "300 Mbps", "1 Gbps", "3 Gbps", "10 Gbps"};
-static const uint16_t ND_C[4] = {0xCFFE, GREEN, 0x1CD0, 0x1289};     // download: teal, head to tail
-static const uint16_t NU_C[4] = {0xFF16, ORANGE, 0xBB23, 0x5982};    // upload: orange
+static void graphPush(uint8_t cpu, uint8_t gpu) {
+  hC[gPos] = cpu; hG[gPos] = gpu;
+  traceHead(false, gPos, gTotal);
+  countUp(gTotal);   // a plain ++ wrapped after ~4.5 h of samples and stopped the trace fading for a while
+  if (++gPos >= HIST) gPos = 0;
+}
 
+static void graphRepaint() { graphFrame(); traceRepaint(false, gPos, gTotal); }
+
+// ---- network scope (Net page): download and upload rates, one sample per stats frame, autoscaled in steps ----
 static uint8_t netScaled(uint32_t raw) { uint32_t v = raw * 100 / NSTEP[nScale]; return v > 100 ? 100 : v; }
 
 static void netCaption() {
@@ -1025,38 +1015,15 @@ static void netCaption() {
   tft.setTextColor(GREY); tft.setCursor(26, 163); tft.print(F("Traffic"));
   tft.setTextColor(GREEN); tft.setCursor(80, 163); tft.print(F("down"));
   tft.setTextColor(ORANGE); tft.setCursor(112, 163); tft.print(F("up"));
-  tft.setTextColor(GREY); tft.setCursor(GX + GW - (strlen(NLABEL[nScale]) + 4) * 6, 163); tft.print(F("max ")); tft.print(NLABEL[nScale]);
+  char b[16];                                   // "max 100 Kbps" .. "max 10 Gbps", right-aligned to the chart
+  uint32_t v = NSTEP[nScale];
+  if (v < 1000) snprintf_P(b, sizeof b, PSTR("max %lu Kbps"), v);
+  else if (v < 1000000UL) snprintf_P(b, sizeof b, PSTR("max %lu Mbps"), v / 1000);
+  else snprintf_P(b, sizeof b, PSTR("max %lu Gbps"), v / 1000000UL);
+  tft.setTextColor(GREY); tft.setCursor(GX + GW - strlen(b) * 6, 163); tft.print(b);
 }
 
-static void netRecolor(int age, int level) {
-  if (nTotal <= age) return;
-  int j = ((int)nPos - age + HIST) % HIST;
-  if (j < 1) return;
-  drawSeg(nU, j, NU_C[level]);
-  drawSeg(nD, j, ND_C[level]);
-}
-
-static void netDrawNew() {                      // the sample at nPos is stored but not yet counted
-  int x = GX + nPos * GSTEP;
-  graphGrid(x + (nPos ? 1 : 0), GSTEP * 3);     // erase the gap ahead of the beam
-  if (nPos >= 1 && nTotal >= 1) { drawSeg(nU, nPos, NU_C[0]); drawSeg(nD, nPos, ND_C[0]); }
-  netRecolor(1, 1); netRecolor(AGE1, 2); netRecolor(AGE2, 3);
-}
-
-static void netRepaint() {
-  graphFrame(false);
-  for (int j = 1; j < HIST; j++) {
-    if (nTotal < HIST && j >= nPos) break;
-    if (nTotal >= HIST && j >= nPos && j < nPos + 3) continue;
-    int age = ((int)nPos - 1 - j + 2 * HIST) % HIST;
-    int lv = age == 0 ? 0 : age < AGE1 ? 1 : age < AGE2 ? 2 : 3;
-    drawSeg(nU, j, NU_C[lv]);
-    drawSeg(nD, j, ND_C[lv]);
-    pump();
-  }
-}
-
-static bool netVisible();   // defined with the page state
+static void netRepaint() { graphFrame(false); traceRepaint(true, nPos, nTotal); }
 
 // the numbers next to the chart are a 3 s average with a dead band, so they only change when the traffic really does
 static uint32_t rateD[12], rateU[12];
@@ -1086,8 +1053,8 @@ static void netTick() {
   if (rescaled) for (uint8_t i = 0; i < HIST; i++) { nD[i] = netScaled(nRawD[i]); nU[i] = netScaled(nRawU[i]); }
   else { nD[nPos] = netScaled(nRawD[nPos]); nU[nPos] = netScaled(nRawU[nPos]); }
   bool vis = netVisible();
-  if (vis && !rescaled) netDrawNew();
-  nTotal++;
+  if (vis && !rescaled) traceHead(true, nPos, nTotal);
+  countUp(nTotal);
   if (++nPos >= HIST) nPos = 0;
   if (vis && rescaled) { netRepaint(); netCaption(); }
 }
@@ -1139,8 +1106,8 @@ static void drawClaude() {
   if (!clValid || cl.busy != clDrawn.busy) tft.drawRect(EB_X, EB_Y, 9, EB_H, cl.busy ? CYAN : GREY);
   vbar(0, cl.wk); vbar(1, cl.s5h);
   char b[24];
-  if (cl.s5h >= 0) snprintf(b, sizeof b, "ctx %d%%  5h %d%%  %d:%02d   ", cl.ctx, cl.s5h, cl.reset / 60, cl.reset % 60);
-  else snprintf(b, sizeof b, "ctx %d%%  5h --          ", cl.ctx);
+  if (cl.s5h >= 0) snprintf_P(b, sizeof b, PSTR("ctx %d%%  5h %d%%  %d:%02d   "), cl.ctx, cl.s5h, cl.reset / 60, cl.reset % 60);
+  else snprintf_P(b, sizeof b, PSTR("ctx %d%%  5h --          "), cl.ctx);
   uint16_t col = levelColor(max((int)cl.ctx, (int)cl.s5h), 60, 80), sig = sigOf(b, col);
   if (sig != spCtx.sig) {
     spCtx.sig = sig;
@@ -1148,8 +1115,8 @@ static void drawClaude() {
     bxText(nullptr, col, 328, 242, b);
     bxEnd(&spCtx);
   }
-  if (cl.docker < 0) snprintf(b, sizeof b, "docker --");
-  else snprintf(b, sizeof b, "docker %d", cl.docker);
+  if (cl.docker < 0) snprintf_P(b, sizeof b, PSTR("docker --"));
+  else snprintf_P(b, sizeof b, PSTR("docker %d"), cl.docker);
   hdrText(spDocker, 28, 118, &FreeSans9pt7b, CYAN, 28, b);   // never reaches the "up" text at x=150
   uint16_t cc = cl.busy ? YELLOW : GREY;
   if (sigOf("claude", cc) != spClaude.sig) {               // whole box: it also clears the working dot
@@ -1164,39 +1131,20 @@ static void drawClaude() {
 
 static void drawStatic() {
   pageMode = pageScope = pageLogo = pageNet = false;
-#ifdef PERF
-  uint32_t t0 = micros();
-#endif
   tft.fillScreen(BLACK);
-#ifdef PERF
-  uint32_t t1 = micros();
-#endif
   for (int i = 0; i < 3; i++) gaugeFrame(G[i]);
   for (int i = 0; i < 4; i++) gaugeFrame(T[i]);
-#ifdef PERF
-  uint32_t t2 = micros();
-#endif
-  panelTitle(28, 168, "Load history");
+  panelTitle(28, 168, F("Load history"));
   tft.setTextColor(CYAN); tft.setCursor(108, 168); tft.print(F("CPU"));
   tft.setTextColor(MAGENTA); tft.setCursor(132, 168); tft.print(F("GPU"));
-  panelTitle(328, 168, "Network");
+  panelTitle(328, 168, F("Network"));
   tft.fillTriangle(328, 187, 340, 187, 334, 198, GREEN);     // download
   tft.fillTriangle(328, 226, 340, 226, 334, 215, ORANGE);    // upload
   tft.drawFastVLine(318, 166, 86, DARK);
   tft.drawFastHLine(0, 258, W, DARK);
   graphGeom(false);
-#ifdef PERF
-  uint32_t t3 = micros();
-#endif
   graphRepaint();
-#ifdef PERF
-  uint32_t t4 = micros();
-#endif
   vbarFrame(); clValid = false;
-#ifdef PERF
-  Serial.print(F("static fill=")); Serial.print(t1 - t0); Serial.print(F(" gauges=")); Serial.print(t2 - t1);
-  Serial.print(F(" misc=")); Serial.print(t3 - t2); Serial.print(F(" scope=")); Serial.print(t4 - t3); Serial.print(F(" vbar=")); Serial.println(micros() - t4);
-#endif
   memset(cellHash, 0, sizeof cellHash); bIdx = bCnt = bSev = bBorder = 255; bandDirty = 0; lsReset();
   for (uint8_t i = 0; i < 3; i++) spanReset(spNote[i]);
   spanReset(spLoad); spanReset(spVram); spanReset(spRate[0]); spanReset(spRate[1]); spanReset(spCtx);
@@ -1232,7 +1180,7 @@ static void setScreen(uint8_t mode) {   // low bits: 0 dashboard, 1 full page, 2
     memset(lineHash, 0, sizeof lineHash); lsReset();
     if (pageScope) {
       graphGeom(true);
-      panelTitle(26, 163, "Load history");
+      panelTitle(26, 163, F("Load history"));
       tft.setTextColor(CYAN); tft.setCursor(106, 163); tft.print(F("CPU"));
       tft.setTextColor(MAGENTA); tft.setCursor(130, 163); tft.print(F("GPU"));
       graphRepaint();
@@ -1288,6 +1236,10 @@ static void ctext(int y, uint8_t sz, uint16_t col, const char *s) {
   tft.setTextSize(sz); tft.setTextColor(col, BLACK);
   tft.setCursor(240 - (int)strlen(s) * 3 * sz, y); tft.print(s);
 }
+static void ctext(int y, uint8_t sz, uint16_t col, const __FlashStringHelper *s) {
+  tft.setTextSize(sz); tft.setTextColor(col, BLACK);
+  tft.setCursor(240 - (int)strlen_P((PGM_P)s) * 3 * sz, y); tft.print(s);
+}
 static void rtext(int xr, int y, uint8_t sz, uint16_t col, const char *s, uint8_t clr) {
   int w = clr * 6 * sz;
   tft.fillRect(xr - w, y, w, 8 * sz, BLACK);
@@ -1301,28 +1253,25 @@ static uint32_t ease(uint32_t t, uint32_t dur) {   // 0..1000, quadratic ease-ou
 }
 static void fmtWh(char *o, size_t n, uint32_t wh10) {
   uint32_t wh = wh10 / 10;
-  if (wh >= 1000) snprintf(o, n, "%lu.%02lu kWh", wh / 1000, (wh % 1000) / 10);
-  else snprintf(o, n, "%lu Wh", wh);
+  if (wh >= 1000) snprintf_P(o, n, PSTR("%lu.%02lu kWh"), wh / 1000, (wh % 1000) / 10);
+  else snprintf_P(o, n, PSTR("%lu Wh"), wh);
 }
 static void fmtMB(char *o, size_t n, uint32_t mb) {
-  if (mb >= 100000) snprintf(o, n, "%lu GB", mb / 1000);                        // decimal, three significant digits at most
-  else if (mb >= 1000) snprintf(o, n, "%lu.%lu GB", mb / 1000, (mb % 1000) / 100);
-  else snprintf(o, n, "%lu MB", mb);
+  if (mb >= 100000) snprintf_P(o, n, PSTR("%lu GB"), mb / 1000);                        // decimal, three significant digits at most
+  else if (mb >= 1000) snprintf_P(o, n, PSTR("%lu.%lu GB"), mb / 1000, (mb % 1000) / 100);
+  else snprintf_P(o, n, PSTR("%lu MB"), mb);
 }
-static void fmtHMS(char *o, size_t n, uint32_t s) { snprintf(o, n, "%02lu:%02lu:%02lu", (s / 3600) % 100, (s / 60) % 60, s % 60); }
-static const char *ssTitle() {
-  switch (byeReason) { case 1: return "POWERED OFF"; case 2: return "REBOOTING"; case 3: return "MONITOR STOPPED"; }
-  return "LINK LOST";
+static void fmtHMS(char *o, size_t n, uint32_t s) { snprintf_P(o, n, PSTR("%02lu:%02lu:%02lu"), (s / 3600) % 100, (s / 60) % 60, s % 60); }
+static const __FlashStringHelper *ssTitle() {
+  switch (byeReason) { case 1: return F("POWERED OFF"); case 2: return F("REBOOTING"); case 3: return F("MONITOR STOPPED"); }
+  return F("LINK LOST");
 }
 static uint16_t ssTitleCol() { return byeReason == 1 ? ORANGE : byeReason == 2 ? YELLOW : byeReason == 3 ? GREY : CYAN; }
 static uint16_t grey565(uint8_t g) { return ((g >> 3) << 11) | ((g >> 2) << 5) | (g >> 3); }
-static uint16_t peakColor(uint8_t v, bool temp) {
-  if (temp) return v >= 80 ? RED : v >= 60 ? ORANGE : TEMP_OK;
-  return v >= 85 ? RED : v >= 60 ? YELLOW : GREEN;
-}
+static uint16_t peakColor(uint8_t v, bool temp) { return temp ? tempColor(v, 60) : levelColor(v); }
 static void ssClock(char *o, size_t n, uint32_t elapsedS) {   // wall clock estimate: time of the signal + elapsed
   uint32_t m = (offH * 60UL + offM + elapsedS / 60) % 1440;
-  snprintf(o, n, "%02lu:%02lu", m / 60, m % 60);
+  snprintf_P(o, n, PSTR("%02lu:%02lu"), m / 60, m % 60);
 }
 
 static void ssGoto(uint8_t p) {
@@ -1336,25 +1285,25 @@ static void ssGoto(uint8_t p) {
       for (uint8_t i = 0; i < 36; i++) { stars[i].x = random(480); stars[i].y = random(300); stars[i].sp = 1 + random(3); }
       for (uint8_t i = 0; i < 8; i++) orbX[i] = -100;
       ctext(22, 3, ssTitleCol(), ssTitle());
-      ctext(100, 2, GREY, byeReason ? "OFF FOR" : "NO DATA FOR");
+      ctext(100, 2, GREY, byeReason ? F("OFF FOR") : F("NO DATA FOR"));
       break;
     case 1: {
-      ctext(10, 3, CYAN, "LAST SESSION");
-      static const char *const L[5] = {"UPTIME", "ENERGY ~", "DOWNLOAD", "UPLOAD", "FULLEST DISK"};
+      ctext(10, 3, CYAN, F("LAST SESSION"));
+      static const char L[] PROGMEM = "UPTIME\0ENERGY ~\0DOWNLOAD\0UPLOAD\0FULLEST DISK";
       tft.setTextSize(2); tft.setTextColor(GREY, BLACK);
-      for (uint8_t i = 0; i < 5; i++) { tft.setCursor(30, 66 + i * 48); tft.print(L[i]); }
+      for (uint8_t i = 0; i < 5; i++) { tft.setCursor(30, 66 + i * 48); tft.print(FS(nthP(L, i))); }
       break; }
     case 2: {
-      ctext(10, 3, CYAN, "PEAKS");
-      static const char *const L[4] = {"CPU", "GPU", "CPU T", "GPU T"};
+      ctext(10, 3, CYAN, F("PEAKS"));
+      static const char L[] PROGMEM = "CPU\0GPU\0CPU T\0GPU T";
       tft.setTextSize(2); tft.setTextColor(GREY, BLACK);
-      for (uint8_t i = 0; i < 4; i++) { tft.setCursor(50 + i * 110 + (60 - (int)strlen(L[i]) * 12) / 2, 280); tft.print(L[i]); }
+      for (uint8_t i = 0; i < 4; i++) { PGM_P l = nthP(L, i); tft.setCursor(50 + i * 110 + (60 - (int)strlen_P(l) * 12) / 2, 280); tft.print(FS(l)); }
       tft.drawFastHLine(30, 270, 420, DARK);
       break; }
     case 3: {
-      ctext(10, 3, CYAN, "ENERGY");
+      ctext(10, 3, CYAN, F("ENERGY"));
       uint32_t ch = sum.wh10 / 10 / 12;
-      if (ch) snprintf(b, sizeof b, "~ %lu phone charges", ch); else snprintf(b, sizeof b, "less than 1 phone charge");
+      if (ch) snprintf_P(b, sizeof b, PSTR("~ %lu phone charges"), ch); else snprintf_P(b, sizeof b, PSTR("less than 1 phone charge"));
       ctext(108, 2, GREY, b);
       if (ch) { tft.setTextSize(1); tft.setTextColor(DARK, BLACK); tft.setCursor(240 - 111, 130); tft.print(F("each battery = 1 charge (12 Wh)")); }
       ssShown[1] = 0;
@@ -1402,7 +1351,7 @@ static void ssTick() {
         fmtHMS(b, sizeof b, el); ctext(130, 6, WHITE, b);
         ssClock(c, sizeof c, 0);
         char n[8]; ssClock(n, sizeof n, el);
-        snprintf(b, sizeof b, "since %s  now %s", c, n); ctext(204, 2, GREY, b);
+        snprintf_P(b, sizeof b, PSTR("since %s  now %s"), c, n); ctext(204, 2, GREY, b);
       }
       break; }
     case 1: {
@@ -1415,11 +1364,11 @@ static void ssTick() {
         if (ssShown[i] < 0) tft.drawFastHLine(30, 66 + i * 48 + 30, 420, DARK);
         ssShown[i] = v;
         uint16_t col = WHITE;
-        if (i == 0) { col = CYAN; if (v >= 1440) snprintf(b, sizeof b, "%lud %02luh %02lum", v / 1440, (v / 60) % 24, v % 60); else snprintf(b, sizeof b, "%luh %02lum", v / 60, v % 60); }
+        if (i == 0) { col = CYAN; if (v >= 1440) snprintf_P(b, sizeof b, PSTR("%lud %02luh %02lum"), v / 1440, (v / 60) % 24, v % 60); else snprintf_P(b, sizeof b, PSTR("%luh %02lum"), v / 60, v % 60); }
         else if (i == 1) { col = YELLOW; fmtWh(b, sizeof b, v); }
         else if (i == 2) { col = GREEN; fmtMB(b, sizeof b, v); }
         else if (i == 3) { col = ORANGE; fmtMB(b, sizeof b, v); }
-        else { col = peakColor(sum.disk, false); snprintf(b, sizeof b, "%ld%%", v); }
+        else { col = peakColor(sum.disk, false); snprintf_P(b, sizeof b, PSTR("%ld%%"), v); }
         rtext(450, 62 + i * 48, 3, col, b, 14);
       }
       break; }
@@ -1436,7 +1385,7 @@ static void ssTick() {
         ssShown[4] = 1;
         tft.setTextSize(2);
         for (uint8_t i = 0; i < 4; i++) {
-          snprintf(b, sizeof b, i < 2 ? "%u%%" : "%uC", val[i]);
+          snprintf_P(b, sizeof b, i < 2 ? PSTR("%u%%") : PSTR("%uC"), val[i]);
           tft.setTextColor(peakColor(val[i], i >= 2), BLACK);
           int h = (uint32_t)val[i] * 170 / 100;
           tft.setCursor(X[i] + (60 - (int)strlen(b) * 12) / 2, max(40, 268 - h - 22)); tft.print(b);
@@ -1473,7 +1422,7 @@ static void ssTick() {
       if ((int32_t)el != ssShown[0]) {
         ssShown[0] = el;
         fmtHMS(b, sizeof b, el); ctext(216, 4, WHITE, b);
-        ssClock(c, sizeof c, el); snprintf(b, sizeof b, "now %s", c); ctext(268, 2, GREY, b);
+        ssClock(c, sizeof c, el); snprintf_P(b, sizeof b, PSTR("now %s"), c); ctext(268, 2, GREY, b);
       }
       break; }
   }
@@ -1483,7 +1432,6 @@ static void ssTick() {
 enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7, F_SCREEN = 8, F_LINE = 9, F_PAGE = 10, F_CMD = 11 };
 static bool menuDirty = false;    // the highlighted menu entry (or its pin) changed
 static bool menuPinned = false;   // the PC says the current page is pinned
-static void menuBar();
 static uint8_t menuSlot = 255;    // which menu entry the PC says is showing (255 = none)
 static bool doCal = false;        // the PC asked for a touch calibration
 
@@ -1503,7 +1451,7 @@ static void handleFrame(uint8_t type, const uint8_t *p, uint8_t len) {
     st.cpu = min((int)p[0], 100); st.ram = min((int)p[1], 100); st.cpuT = p[2];
     st.gpu = min((int)p[3], 100); st.gpuT = p[4]; st.vram = min((int)p[5], 100);
     st.down = rd32(p + 6); st.up = rd32(p + 10); st.uptime = rd32(p + 14);
-    snprintf(st.clock, sizeof st.clock, "%02d:%02d", min((int)p[18], 23), min((int)p[19], 59));
+    snprintf_P(st.clock, sizeof st.clock, PSTR("%02d:%02d"), min((int)p[18], 23), min((int)p[19], 59));
     st.swap = min((int)p[20], 100);
     for (int i = 0; i < 3; i++) st.load[i] = p[21 + 2 * i] | p[22 + 2 * i] << 8;
     st.ncpu = max((int)p[27], 1);
@@ -1555,7 +1503,8 @@ static void feed(uint8_t b) {
 // ---- boot screen: one line per module, drawn as it initialises ----
 static uint8_t bootY = 40;
 static int freeRam() { extern int __heap_start, *__brkval; int v; return (int)&v - (__brkval ? (int)__brkval : (int)&__heap_start); }
-static void bootLine(const __FlashStringHelper *name, const char *detail, bool ok = true) {
+template <typename T>   // detail: a RAM buffer or an F() string
+static void bootLine(const __FlashStringHelper *name, T detail, bool ok = true) {
   tft.setTextSize(2);
   tft.setCursor(14, bootY); tft.setTextColor(GREY); tft.print('[');
   tft.setTextColor(ok ? GREEN : ORANGE); tft.print(ok ? F(" OK ") : F("WAIT")); tft.setTextColor(GREY); tft.print(F("] "));
@@ -1568,15 +1517,15 @@ static void bootScreen(uint16_t id) {
   tft.setTextSize(3); tft.setTextColor(CYAN); tft.setCursor(14, 8); tft.print(F("TFT MONITOR"));
   tft.drawFastHLine(14, 34, 452, DARK);
   char b[24];
-  snprintf(b, sizeof b, "ILI%X %dx%d", id, W, H); bootLine(F("DISPLAY"), b);
-  bootLine(F("SERIAL"), "115200 8N1"); 
-  bootLine(F("PROTOCOL"), "CRC-8 frames");
-  bootLine(F("GAUGES"), "CPU GPU RAM");
-  bootLine(F("RINGS"), "TEMP SWAP");
-  bootLine(F("SCOPE"), "load history");
-  bootLine(F("INFO BAND"), "alerts+pages");
-  snprintf(b, sizeof b, "%d B free", freeRam()); bootLine(F("MEMORY"), b);
-  bootLine(F("HOST LINK"), "waiting...", false);
+  snprintf_P(b, sizeof b, PSTR("ILI%X %dx%d"), id, W, H); bootLine(F("DISPLAY"), b);
+  bootLine(F("SERIAL"), F("115200 8N1")); 
+  bootLine(F("PROTOCOL"), F("CRC-8 frames"));
+  bootLine(F("GAUGES"), F("CPU GPU RAM"));
+  bootLine(F("RINGS"), F("TEMP SWAP"));
+  bootLine(F("SCOPE"), F("load history"));
+  bootLine(F("INFO BAND"), F("alerts+pages"));
+  snprintf_P(b, sizeof b, PSTR("%d B free"), freeRam()); bootLine(F("MEMORY"), b);
+  bootLine(F("HOST LINK"), F("waiting..."), false);
 }
 
 static bool booted;
@@ -1665,7 +1614,7 @@ static void touchInit() {
 // ---- bottom menu: a thin strip on every screen (y 300..319); a tap sends the choice to the PC ----
 #define MENU_Y 300
 #define MENU_N 7
-static const char *const MENU[MENU_N] = {"Home", "CPU", "RAM", "Net", "Claude", "System", "Setup"};
+static const char MENU[] PROGMEM = "Home\0CPU\0RAM\0Net\0Claude\0System\0Setup";   // MENU_N entries
 static void menuBar() {
   menuDirty = false;
   int w = W / MENU_N;
@@ -1675,7 +1624,9 @@ static void menuBar() {
     int x0 = i * w;
     bool on = i == menuSlot;
     if (on) { tft.fillRect(x0 + 3, MENU_Y + 3, w - 6, H - MENU_Y - 5, DARK); tft.fillRect(x0 + 10, H - 3, w - 20, 2, GREEN); }
-    put(&FreeSans9pt7b, on ? WHITE : GREY, x0 + w / 2 + (on && menuPinned ? 5 : 0), MENU_Y + 15, MENU[i], 1);
+    char label[8];
+    strcpy_P(label, nthP(MENU, i));
+    put(&FreeSans9pt7b, on ? WHITE : GREY, x0 + w / 2 + (on && menuPinned ? 5 : 0), MENU_Y + 15, label, 1);
     if (on && menuPinned) {                                // a pin: round head, needle down-left
       tft.fillCircle(x0 + 9, MENU_Y + 8, 3, ORANGE);
       tft.drawLine(x0 + 9, MENU_Y + 10, x0 + 6, MENU_Y + 16, ORANGE);
@@ -1744,19 +1695,6 @@ void setup() {
   winX0 = -1; winY0 = -1;    // setRotation reset the window behind our back
 #endif
   W = tft.width(); H = tft.height();
-#ifdef PERF
-  { uint32_t t;
-    t = micros(); tft.fillRect(0, 0, 100, 100, BLACK); Serial.print(F("bench fill10k=")); Serial.print(micros() - t);
-    t = micros(); tft.fillRect(0, 0, 100, 100, CYAN); Serial.print(F(" fill10kc=")); Serial.print(micros() - t);
-    t = micros(); for (int i = 0; i < 1000; i++) tft.drawPixel(i % 100, i / 100, WHITE); Serial.print(F(" px1000=")); Serial.print(micros() - t);
-    t = micros(); put(&FreeSansBold18pt7b, WHITE, 10, 60, "88%"); Serial.print(F(" put18=")); Serial.print(micros() - t);
-    t = micros(); bxBegin(0, 30, 88, 28, BLACK); bxText(&FreeSansBold18pt7b, GREEN, 10, 54, "88"); bxText(&FreeSansBold12pt7b, GREEN, 50, 54, "%"); bxEnd();
-    Serial.print(F(" blit88x28=")); Serial.print(micros() - t);
-    t = micros(); bxBegin(0, 30, 446, 28, BLACK); bxEnd(); Serial.print(F(" blitEmpty446=")); Serial.print(micros() - t);
-    t = micros(); bxBegin(0, 30, 446, 28, BLACK); bxText(&FreeSansBold18pt7b, RED, 0, 53, "CONTAINER RESTARTING"); bxEnd(); Serial.print(F(" blitBig446=")); Serial.print(micros() - t);
-    t = micros(); for (int i = 0; i < 30; i++) segment(G[0], i, GREEN); Serial.print(F(" seg30=")); Serial.println(micros() - t);
-  }
-#endif
   touchInit();
   if (!touchOk) calibrate();    // first run: three taps, then it is remembered in EEPROM
   bootScreen(id);
@@ -1765,10 +1703,6 @@ void setup() {
 static void pump() { while (Serial.available()) feed(Serial.read()); }
 
 void loop() {
-#ifdef PERF
-  static uint32_t passT;
-  { uint32_t t = micros(); if (passT) perfAdd(5, t - passT); passT = t; }
-#endif
   pump();   // drain first, then draw only the newest data once (drawing keeps draining between steps)
   touchPoll();
   if (gotS) netTick();
@@ -1780,30 +1714,18 @@ void loop() {
       if (!booted) {   // finish the boot log, then swap to the dashboard
         booted = true;
         bootY -= 22; tft.fillRect(0, bootY, 480, 22, BLACK);
-        bootLine(F("HOST LINK"), "connected");
+        bootLine(F("HOST LINK"), F("connected"));
         delay(350);
       }
       drawStatic(); drawHeader(); qn = 0;
     }
     lastRx = millis();
-#ifdef PERF
-    uint32_t t0 = micros();
-#endif
     redrawFirst();
-#ifdef PERF
-    uint32_t t1 = micros();
-#endif
     if (online) drawPanelItems(40);  // alerts / band changes before the minor readouts
-#ifdef PERF
-    uint32_t t2 = micros();
-#endif
     redrawRest();
-#ifdef PERF
-    perfAdd(0, (t1 - t0) + (micros() - t2));
-#endif
-    if (!clValid && !pageMode) { PERF_T0; drawClaude(); PERF_END(4); }
+    if (!clValid && !pageMode) drawClaude();
   }
-  if (gotC) { gotC = false; if (online && !pageMode) { PERF_T0; drawClaude(); PERF_END(4); } }
+  if (gotC) { gotC = false; if (online && !pageMode) drawClaude(); }
   if (byeGot) {
     byeGot = false;
     if (sumValid && !saver) startSaver(byeReason, offH, offM, millis());
@@ -1815,9 +1737,6 @@ void loop() {
   if (millis() - lastStat > 5000) {
     lastStat = millis();
     Serial.print(F("ok=")); Serial.print(framesOk); Serial.print(F(" bad=")); Serial.println(framesBad);
-#ifdef PERF
-    perfPrint();
-#endif
   }
   if (online && millis() - lastRx > 5000) {
     online = false;

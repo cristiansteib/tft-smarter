@@ -31,8 +31,6 @@ type snapshot struct {
 	disks                                 []disk
 	cl                                    claudeInfo
 	gpuW, gpuLimit, nvmeT                 int
-	pcW                                   int
-	whBoot                                float64
 	psi                                   [3]float64
 	fullMem, fullIO                       float64
 	latency, latFails                     int
@@ -42,24 +40,22 @@ type snapshot struct {
 	ramUsed, swapUsed, swapTotal          float64 // bytes
 	netRx, netTx                          uint64  // bytes since boot
 	netRxH, netTxH                        uint64  // bytes in the last hour
-	down, up, peakDown, peakUp            int     // kbit/s now, and the hour's peaks
 	downAvg, upAvg                        int     // kbit/s, 3 s average with a dead band (for text readouts)
 }
 
 // engine evaluates alert rules with hysteresis and decides when alerts take over the info panel.
 type engine struct {
-	mu         sync.Mutex
-	lvl        map[string]int // latched level per key
-	count      map[string]int // consecutive true ticks per key
-	active     map[string]*alert
-	notes      map[string]*alert
-	resolved   []*alert
-	announced  map[string]int
-	takeStart  time.Time
-	takeUntil  time.Time
-	lastTake   time.Time
-	noteSeq    int
-	lastActive int
+	mu        sync.Mutex
+	lvl       map[string]int // latched level per key
+	count     map[string]int // consecutive true ticks per key
+	active    map[string]*alert
+	notes     map[string]*alert
+	resolved  []*alert
+	announced map[string]int
+	takeStart time.Time
+	takeUntil time.Time
+	lastTake  time.Time
+	noteSeq   int
 }
 
 func newEngine() *engine {

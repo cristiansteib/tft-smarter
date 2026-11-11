@@ -2,11 +2,8 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,13 +14,9 @@ import (
 
 type claudeInfo struct {
 	ctx, s5h, s5hResetMin, wk, busy int
-	addSession, projWeekly, budget  int // forecast: extra session % until reset, projected weekly %, today's budget %
-	sessions, busySessions          int
-	// from the usage file: exact reset times, pace against the daily budget, burn rate and risk
-	sessionResetAt, weeklyResetAt time.Time
-	pace, rate, pOver             float64 // pace: % over (+) or under (-) today's budget; rate: % of the 5 h limit per hour
-	fetchedAt                     time.Time
-	status                        string
+	sessions                        int // live Claude Code sessions
+	// from the usage file: exact reset times, and when the numbers were fetched
+	sessionResetAt, weeklyResetAt, fetchedAt time.Time
 }
 
 var (
@@ -47,7 +40,7 @@ type session struct {
 }
 
 // newestSession picks the most recently active live Claude Code session.
-func newestSession(home string) (best *session, live, busy int) {
+func newestSession(home string) (best *session, live int) {
 	files, _ := filepath.Glob(home + "/.claude/sessions/*.json")
 	for _, f := range files {
 		b, err := os.ReadFile(f)
@@ -62,15 +55,21 @@ func newestSession(home string) (best *session, live, busy int) {
 			continue
 		}
 		live++
-		if s.Status == "busy" {
-			busy++
-		}
 		if best == nil || s.UpdatedAt > best.UpdatedAt {
 			c := s
 			best = &c
 		}
 	}
 	return
+}
+
+// usageCache remembers the last transcript read: an idle session's file does not change, so it is not read again.
+var usageCache struct {
+	path  string
+	size  int64
+	mod   time.Time
+	model string
+	used  int
 }
 
 // lastUsage reads the tail of a transcript and returns the model and tokens of the last assistant turn.
@@ -80,8 +79,20 @@ func lastUsage(path string) (string, int) {
 		return "", 0
 	}
 	defer f.Close()
+	st, err := f.Stat()
+	if err == nil && usageCache.path == path && usageCache.size == st.Size() && usageCache.mod.Equal(st.ModTime()) {
+		return usageCache.model, usageCache.used
+	}
+	model, used := scanUsage(f, st, err)
+	if err == nil {
+		usageCache.path, usageCache.size, usageCache.mod, usageCache.model, usageCache.used = path, st.Size(), st.ModTime(), model, used
+	}
+	return model, used
+}
+
+func scanUsage(f *os.File, st os.FileInfo, statErr error) (string, int) {
 	const tail = 256 * 1024
-	if st, err := f.Stat(); err == nil && st.Size() > tail {
+	if statErr == nil && st.Size() > tail {
 		f.Seek(st.Size()-tail, io.SeekStart)
 	}
 	data, _ := io.ReadAll(f)
@@ -115,8 +126,8 @@ func lastUsage(path string) (string, int) {
 func claudeStats() claudeInfo {
 	c := claudeInfo{ctx: 0, s5h: -1, s5hResetMin: -1, wk: -1}
 	home, _ := os.UserHomeDir()
-	s, live, busy := newestSession(home)
-	c.sessions, c.busySessions = live, busy
+	s, live := newestSession(home)
+	c.sessions = live
 	if s != nil {
 		path := home + "/.claude/projects/" + slugRe.ReplaceAllString(s.Cwd, "-") + "/" + s.SessionID + ".jsonl"
 		if model, used := lastUsage(path); model != "" {
@@ -139,21 +150,9 @@ func claudeStats() claudeInfo {
 			SessionReset string  `json:"session_reset"`
 			WeeklyReset  string  `json:"weekly_reset"`
 			FetchedAt    int64   `json:"fetched_at"`
-			Status       string  `json:"status"`
-			Daily        struct {
-				Budget float64 `json:"budget"`
-				Pace   float64 `json:"pace"`
-			} `json:"daily"`
-			Forecast struct {
-				AddSession float64 `json:"add_session"`
-				ProjWeekly float64 `json:"proj_weekly"`
-				Rate       float64 `json:"rate"`
-				POver      float64 `json:"p_over"`
-			} `json:"forecast"`
 		}
 		if json.Unmarshal(b, &u) == nil && u.HasUsage {
 			c.s5h, c.wk = int(u.SessionPct+0.5), int(u.WeeklyPct+0.5)
-			c.addSession, c.projWeekly, c.budget = int(u.Forecast.AddSession+0.5), int(u.Forecast.ProjWeekly+0.5), int(u.Daily.Budget+0.5)
 			if t, err := time.Parse(time.RFC3339, u.SessionReset); err == nil {
 				c.s5hResetMin = max(0, int(time.Until(t).Minutes()))
 				c.sessionResetAt = t
@@ -161,32 +160,10 @@ func claudeStats() claudeInfo {
 			if t, err := time.Parse(time.RFC3339, u.WeeklyReset); err == nil {
 				c.weeklyResetAt = t
 			}
-			c.pace, c.rate, c.pOver, c.status = u.Daily.Pace, u.Forecast.Rate, u.Forecast.POver, u.Status
 			if u.FetchedAt > 0 {
 				c.fetchedAt = time.Unix(u.FetchedAt, 0)
 			}
 		}
 	}
 	return c
-}
-
-var dockerClient = &http.Client{
-	Timeout: time.Second,
-	Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
-	}},
-}
-
-// dockerRunning returns the number of running containers via the Docker socket (-1 if unavailable).
-func dockerRunning() int {
-	resp, err := dockerClient.Get("http://docker/containers/json")
-	if err != nil {
-		return -1
-	}
-	defer resp.Body.Close()
-	var cs []json.RawMessage
-	if json.NewDecoder(resp.Body).Decode(&cs) != nil {
-		return -1
-	}
-	return len(cs)
 }

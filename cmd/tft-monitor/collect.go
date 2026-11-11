@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -17,10 +21,10 @@ type nameVal struct {
 }
 
 type dockerInfo struct {
-	ok                                             bool
-	total, up, healthy, unhealthy, restarting, bad int
-	badNames                                       []string
-	top                                            []nameVal // by memory, bytes
+	ok                                    bool
+	total, up, unhealthy, restarting, bad int
+	badNames                              []string
+	top                                   []nameVal // by memory, bytes
 }
 
 const topN = 10 // processes kept per ranking (rolling credits show them all)
@@ -37,7 +41,6 @@ type bg struct {
 	top      topInfo
 	latency  int // ms, -1 = failed
 	latFails int
-	memTotal float64 // bytes
 }
 
 func (b *bg) get() (dockerInfo, topInfo, int, int) {
@@ -99,36 +102,109 @@ func startCollectors() *bg {
 
 type procAgg struct{ ticks, rss uint64 }
 
-// scanProcs sums CPU ticks and resident memory per process name.
+// scanProcs sums CPU ticks and resident memory per process name. It runs over every process every 4 s, so it reads
+// /proc/<pid>/stat into one reused buffer and picks the three fields it needs without splitting the line.
 func scanProcs() map[string]*procAgg {
 	out := map[string]*procAgg{}
-	ents, _ := os.ReadDir("/proc")
-	for _, e := range ents {
-		if e.Name()[0] < '0' || e.Name()[0] > '9' {
+	d, err := os.Open("/proc")
+	if err != nil {
+		return out
+	}
+	pids, _ := d.Readdirnames(-1) // unsorted: os.ReadDir would sort ~1000 names for nothing
+	d.Close()
+	buf := make([]byte, 2048)
+	for _, pid := range pids {
+		if pid[0] < '0' || pid[0] > '9' {
 			continue
 		}
-		s := readFile("/proc/" + e.Name() + "/stat")
-		l, r := strings.IndexByte(s, '('), strings.LastIndexByte(s, ')')
-		if l < 0 || r < l {
+		name, ticks, rss, ok := parseStat(readSmall("/proc/"+pid+"/stat", buf))
+		if !ok {
 			continue
 		}
-		f := strings.Fields(s[r+1:])
-		if len(f) < 22 {
-			continue
-		}
-		ut, _ := strconv.ParseUint(f[11], 10, 64)
-		st, _ := strconv.ParseUint(f[12], 10, 64)
-		rss, _ := strconv.ParseUint(f[21], 10, 64)
-		name := s[l+1 : r]
-		a := out[name]
+		a := out[string(name)]
 		if a == nil {
 			a = &procAgg{}
-			out[name] = a
+			out[string(name)] = a
 		}
-		a.ticks += ut + st
+		a.ticks += ticks
 		a.rss += rss * 4096
 	}
 	return out
+}
+
+// readSmall reads a small /proc file into buf and returns its bytes (nil if it cannot be read).
+func readSmall(path string, buf []byte) []byte {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil
+	}
+	defer syscall.Close(fd)
+	n := 0
+	for n < len(buf) {
+		k, err := syscall.Read(fd, buf[n:])
+		if k <= 0 || err != nil {
+			break
+		}
+		n += k
+	}
+	return buf[:n]
+}
+
+// parseStat picks the command name, utime+stime and rss out of a /proc/<pid>/stat line. The name sits in
+// parentheses and may itself hold spaces and parentheses, so the fields are counted from the last ')'.
+func parseStat(s []byte) (name []byte, ticks, rss uint64, ok bool) {
+	l, r := bytes.IndexByte(s, '('), bytes.LastIndexByte(s, ')')
+	if l < 0 || r < l {
+		return nil, 0, 0, false
+	}
+	var ut, st uint64
+	field := 0 // fields after the name: 0 state ... 11 utime, 12 stime, 21 rss
+	for i := r + 1; field <= 21; field++ {
+		for i < len(s) && isSpace(s[i]) {
+			i++
+		}
+		j := i
+		for j < len(s) && !isSpace(s[j]) {
+			j++
+		}
+		if j == i {
+			return nil, 0, 0, false // fewer than 22 fields
+		}
+		switch field {
+		case 11:
+			ut = parseU(s[i:j])
+		case 12:
+			st = parseU(s[i:j])
+		case 21:
+			rss = parseU(s[i:j])
+		}
+		i = j
+	}
+	return s[l+1 : r], ut + st, rss, true
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == '\v' || c == '\f'
+}
+
+// parseU parses a decimal number; anything else gives 0, as strconv.ParseUint's error case did.
+func parseU(b []byte) uint64 {
+	var v uint64
+	for _, c := range b {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		v = v*10 + uint64(c-'0')
+	}
+	return v
+}
+
+// dockerClient talks to the Docker engine over its unix socket.
+var dockerClient = &http.Client{
+	Timeout: time.Second,
+	Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
+	}},
 }
 
 func queryDocker() dockerInfo {
@@ -171,8 +247,6 @@ func queryDocker() dockerInfo {
 		if strings.Contains(c.Status, "(unhealthy)") {
 			d.unhealthy++
 			d.badNames = append(d.badNames, name)
-		} else if strings.Contains(c.Status, "(healthy)") {
-			d.healthy++
 		}
 		if m, err := strconv.ParseFloat(strings.TrimSpace(readFile("/sys/fs/cgroup/system.slice/docker-"+c.ID+".scope/memory.current")), 64); err == nil {
 			d.top = append(d.top, nameVal{name, m})

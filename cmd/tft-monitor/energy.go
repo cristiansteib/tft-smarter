@@ -27,7 +27,6 @@ type energy struct {
 	PeakCPU, PeakGPU, PeakCT, PeakGT int
 	CPUSum                           float64
 	N                                int64
-	pcW                              float64
 	saved                            time.Time
 	path                             string
 }
@@ -49,8 +48,8 @@ func loadEnergy() *energy {
 
 // add accounts dt seconds at the given raw CPU utilisation (0-100) and GPU watts.
 func (e *energy) add(now time.Time, dt float64, cpuPct, gpuW int) {
-	e.pcW = cpuIdleW + (cpuFullW-cpuIdleW)*float64(cpuPct)/100 + float64(gpuW) + restW
-	e.Wh += e.pcW * dt / 3600
+	w := cpuIdleW + (cpuFullW-cpuIdleW)*float64(cpuPct)/100 + float64(gpuW) + restW
+	e.Wh += w * dt / 3600
 	if now.Sub(e.saved) >= time.Minute {
 		e.saved = now
 		e.save()

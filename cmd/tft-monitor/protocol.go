@@ -29,7 +29,9 @@ func crc8(b []byte) byte {
 }
 
 func frame(typ byte, payload []byte) []byte {
-	out := append([]byte{0xAA, 0x55, typ, byte(len(payload))}, payload...)
+	out := make([]byte, 0, 5+len(payload))
+	out = append(out, 0xAA, 0x55, typ, byte(len(payload)))
+	out = append(out, payload...)
 	return append(out, crc8(out[2:]))
 }
 
@@ -103,18 +105,24 @@ type cell struct {
 	text             string
 }
 
-func cellFrame(c cell) []byte {
-	t := []byte(c.text)
-	for i, b := range t {
+// textFrame encodes a cell or a page row: slot | style | pct | text, the text cut to 70 bytes and anything the
+// board's fonts cannot draw (outside printable ASCII, except the tab between label and value) turned into '?'.
+func textFrame(typ byte, c cell) []byte {
+	t := c.text[:min(len(c.text), 70)]
+	out := make([]byte, 0, 8+len(t))
+	out = append(out, 0xAA, 0x55, typ, byte(3+len(t)), c.slot, c.style, c.pct)
+	for i := 0; i < len(t); i++ {
+		b := t[i]
 		if b > 126 || (b < 32 && b != '\t') {
-			t[i] = '?'
+			b = '?'
 		}
+		out = append(out, b)
 	}
-	if len(t) > 70 {
-		t = t[:70]
-	}
-	return frame(frameCell, append([]byte{c.slot, c.style, c.pct}, t...))
+	return append(out, crc8(out[2:]))
 }
+
+// cellFrame is a cell of the dashboard band.
+func cellFrame(c cell) []byte { return textFrame(frameCell, c) }
 
 func bandFrame(idx, count, sev int, clear, border bool) []byte {
 	f := byte(sev & 3)
@@ -145,12 +153,7 @@ func byeFrame(reason byte, hh, mm int) []byte {
 func screenFrame(mode byte) []byte { return frame(frameScreen, []byte{mode}) }
 
 // lineFrame is a row of a full-screen page; c.slot is the row.
-func lineFrame(c cell) []byte {
-	f := cellFrame(c)
-	f[2] = frameLine
-	f[len(f)-1] = crc8(f[2 : len(f)-1])
-	return f
-}
+func lineFrame(c cell) []byte { return textFrame(frameLine, c) }
 
 const cmdCalibrate = 1
 
