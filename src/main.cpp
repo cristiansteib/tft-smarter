@@ -673,6 +673,7 @@ static bool pageMode = false, pageScope = false, pageLogo = false, pageNet = fal
 static bool netVisible() { return pageMode && pageNet && online; }
 static uint16_t lineHash[10];
 #define LROW 31
+#define NOTE_PAD 6   // a notice sits this much lower: room above the header text (the rows have 17 px to spare)
 
 static void drawLine(const uint8_t *p, uint8_t len) {
   if (len < 3 || p[0] > 9) return;
@@ -691,13 +692,13 @@ static void drawLine(const uint8_t *p, uint8_t len) {
   char *val = strchr(txt, '\t');
   if (val) *val++ = 0;
   uint16_t col = PAL[min(style & 15, 10)];
-  int y = 4 + row * LROW;
+  int y = 4 + row * LROW + (pageNote ? NOTE_PAD : 0);
   char sw[6];
   // one pass over the whole row (the swap row is 2 px taller): label, title rule, bar, value
   // a notice: the header row is filled with the accent (dark text), the other rows leave room for the accent strip
   bool head = pageNote && row == 0;
   int x0 = pageNote && !head ? 8 : 0, lx = pageNote && !head ? 22 : 14;
-  if (head) bxBegin(0, 0, W, LROW + 4, col); else bxBegin(x0, y, W - x0, LROW + (sub ? 2 : 0), BLACK);
+  if (head) bxBegin(0, 0, W, LROW + 4 + NOTE_PAD, col); else bxBegin(x0, y, W - x0, LROW + (sub ? 2 : 0), BLACK);
   // label: title in bold 18, rows in regular 12 (cloud when the row has a bar, mist otherwise)
   int base = y + (head ? 24 : big ? 25 : 21);
   bxText(big ? &FreeSansBold18pt7b : &FreeSans12pt7b, head ? BLACK : big || bright ? col : bar ? WHITE : GREY, lx, base, txt);
@@ -753,7 +754,7 @@ static void bandFlush() {   // blank the slots the new band page did not paint (
   bandDirty = 0;
 }
 
-static void noteStrip() { tft.fillRect(0, LROW + 4, 6, MENU_Y - LROW - 4, PAL[9]); }
+static void noteStrip() { tft.fillRect(0, LROW + 4 + NOTE_PAD, 6, MENU_Y - LROW - 4 - NOTE_PAD, PAL[9]); }
 
 // a notice colour changed: on the notice page every row is drawn again in it (the PC resends them)
 static void setAccent(uint8_t idx, uint16_t c) {
