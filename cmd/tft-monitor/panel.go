@@ -34,6 +34,7 @@ type panel struct {
 	noteID    string    // the notice on screen
 	noteAt    time.Time // when it came up: taps right after that do not dismiss it
 	accent    [2]uint16 // accent colours sent to the board (palette 9 and 10)
+	geo       noteGeo   // the notice layout sent to the board
 }
 
 func newPanel() *panel { return &panel{shown: map[byte]cell{}, sentSlot: -1} }
@@ -429,7 +430,9 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 	var have [256]bool
 	var cells []cell
 	if note != nil {
-		cells = noteCells(*note, p.noteIdx, len(active), now)
+		var geo noteGeo
+		cells, geo = noteCells(*note, p.noteIdx, len(active), now)
+		p.setGeo(geo)
 	} else {
 		cells = p.build(name, sub, s, list, take, since, now)
 	}
@@ -451,7 +454,7 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 	}
 	n := min(3, len(p.pending)) // pacing: the Mega draws slowly and has a small RX buffer
 	for i := range n {
-		if p.pending[i][2] == frameScreen {
+		if t := p.pending[i][2]; t == frameScreen || t == frameGeo { // the board blanks the page for these
 			n = i + 1 // clearing / repainting the screen takes a while: let it finish before sending rows
 			p.hold = now.Add(700 * time.Millisecond)
 			break
@@ -476,7 +479,17 @@ func (p *panel) colors() [][]byte {
 	if p.name != "note" {
 		return nil
 	}
-	return [][]byte{colorFrame(pAccent, p.accent[0]), colorFrame(pAccentLo, p.accent[1])}
+	return [][]byte{colorFrame(pAccent, p.accent[0]), colorFrame(pAccentLo, p.accent[1]), geoFrame(p.geo)}
+}
+
+// setGeo moves a notice's rows: the board blanks the page and draws them again, so they are all sent again.
+func (p *panel) setGeo(g noteGeo) {
+	if g == p.geo {
+		return
+	}
+	p.geo = g
+	clear(p.shown)
+	p.pending = append(p.pending, geoFrame(g))
 }
 
 // setAccent changes the notice colours. On the notice page the board repaints its rows in the new colours, so every

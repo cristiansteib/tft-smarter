@@ -78,6 +78,7 @@ const (
 	frameBand    = 4  // 3 bytes: page idx | page count | flags (bits0-1 severity, bit2 clear band, bit3 border visible)
 	frameCell    = 5  // slot | style | pct | "label\tvalue"
 	frameColor   = 12 // 3 bytes: palette index (9 accent, 10 dim accent) | RGB565 (u16 LE) - colours of the notice page
+	frameGeo     = 13 // 2 bytes: air above the notice header | offset of its content rows (px) - protocol 2
 )
 
 // Cell style: low nibble = palette index of the value; high bits are flags.
@@ -187,3 +188,5 @@ func menuSlot(name string) byte {
 	}
 	return 255
 }
+
+func geoFrame(g noteGeo) []byte { return frame(frameGeo, g[:]) }

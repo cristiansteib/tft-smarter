@@ -38,8 +38,8 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
         <rect width="480" height="320" fill="#000" />
         @if (st.panel.full) {
           @for (r of rows(); track r.row) {
-            <g [attr.transform]="'translate(0,' + (4 + r.row * 31 + (note() ? 6 : 0)) + ')'">
-              @if (r.head) { <rect x="0" y="-10" width="480" height="41" [attr.fill]="r.col" /> }
+            <g [attr.transform]="'translate(0,' + rowY(r.row) + ')'">
+              @if (r.head) { <rect x="0" [attr.y]="-4 - geo()[0]" width="480" [attr.height]="35 + geo()[0]" [attr.fill]="r.col" /> }
               <text [attr.x]="r.lx" [attr.y]="r.big ? 24 : 20" [attr.fill]="r.labelCol" [attr.font-size]="r.big ? 24 : 15" [attr.font-weight]="r.big ? 700 : 400">{{ r.label }}</text>
               @if (r.big && r.row === 0 && !note()) { <rect x="14" y="27" width="452" height="1" fill="#1c2636" /> }
               @if (r.bar) {
@@ -57,7 +57,7 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
               }
             </g>
           }
-          @if (note()) { <rect x="0" y="41" width="6" height="259" [attr.fill]="st.panel.accent[0]" /> }
+          @if (note()) { <rect x="0" [attr.y]="35 + geo()[0]" width="6" [attr.height]="265 - geo()[0]" [attr.fill]="st.panel.accent[0]" /> }
           @if (st.panel.page === 'net') {
             <text x="26" y="170" fill="#8a9bb4" font-size="9">Traffic</text>
             <text x="80" y="170" fill="#27d6b4" font-size="9">down</text><text x="112" y="170" fill="#ff8a3d" font-size="9">up</text>
@@ -166,6 +166,13 @@ export class TftScreen {
 
   /** the notice page: palette 9 / 10 are its accent, the header is drawn on it */
   note = computed(() => this.s()?.panel.page === 'note');
+  geo = computed(() => this.s()?.panel.geo ?? [6, 0]);
+  // where a row sits: on a notice the header gets air above it, the content an offset, the footer sits on the menu
+  rowY(row: number): number {
+    if (!this.note()) return 4 + row * 31;
+    const [head, off] = this.geo();
+    return row === 0 ? 4 + head : row === 8 ? 266 : 4 + row * 31 + head + off;
+  }
 
   rows = computed(() => {
     const st = this.s();

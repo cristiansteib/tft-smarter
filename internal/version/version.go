@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	Proto    = 1
-	MinProto = 1
+	Proto    = 2 // 2: frameGeo, the notice layout
+	MinProto = 2
 	API      = 1
 )
 

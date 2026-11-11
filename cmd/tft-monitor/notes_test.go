@@ -121,7 +121,16 @@ func TestNoteLayoutFits(t *testing.T) {
 			n.Expires = &e
 		}
 		for _, count := range []int{1, 3} {
-			cs := noteCells(n, 0, count, now)
+			cs, geo := noteCells(n, 0, count, now)
+			body := 0
+			for _, c := range cs {
+				if c.slot >= 1 && c.slot <= 7 {
+					body++
+				}
+			}
+			if bottom := noteHeadH + int(geo[0]) + int(geo[1]) + body*noteRowH; bottom > noteFootY {
+				t.Errorf("%q: content ends at %d px, past the footer at %d (geo %v)", m.Title, bottom, noteFootY, geo)
+			}
 			seen := map[byte]bool{}
 			for _, c := range cs {
 				if c.slot > 8 || seen[c.slot] {
@@ -172,15 +181,15 @@ func TestNotePage(t *testing.T) {
 	var order []byte
 	for _, f := range r.sent {
 		switch f[2] {
-		case frameColor, frameScreen:
+		case frameColor, frameGeo, frameScreen:
 			order = append(order, f[2])
 			if f[2] == frameScreen && f[4]&0x04 == 0 {
 				t.Fatalf("screen frame without the notice bit: % x", f)
 			}
 		}
 	}
-	if !bytes.HasPrefix(order, []byte{frameColor, frameColor, frameScreen}) {
-		t.Fatalf("frame order % x, want colour, colour, screen", order)
+	if !bytes.HasPrefix(order, []byte{frameColor, frameColor, frameGeo, frameScreen}) {
+		t.Fatalf("frame order % x, want colour, colour, geometry, screen", order)
 	}
 	if !bytes.Contains(bytes.Join(r.sent, nil), colorFrame(pAccent, notify.RGB565("#00FF00"))) {
 		t.Fatal("the custom colour was not sent")
@@ -226,4 +235,22 @@ func TestNotePage(t *testing.T) {
 		t.Fatalf("hold left %d notices", len(a))
 	}
 	r.want("cpu")
+}
+
+func TestGeometry(t *testing.T) {
+	short, full := geometry(1, false), geometry(7, true)
+	if short[0] != noteAir || full[0] >= short[0] {
+		t.Errorf("air above the header: short %v, full %v", short, full)
+	}
+	// a short simple notice is centred between the header and the footer
+	top := noteHeadH + int(short[0]) + int(short[1])
+	if below := noteFootY - top - noteRowH; below < int(short[1])-1 || below > int(short[1])+1 {
+		t.Errorf("not centred: %v (space above %d, below %d)", short, short[1], below)
+	}
+	if d := geometry(2, true); d[1] > noteGap {
+		t.Errorf("a detail notice stays near its header: %v", d)
+	}
+	if int(full[0])+int(full[1])+noteHeadH+7*noteRowH > noteFootY {
+		t.Errorf("a full notice overlaps the footer: %v", full)
+	}
 }

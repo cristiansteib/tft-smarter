@@ -160,6 +160,7 @@ type panelDoc struct {
 	Pages  []pageDoc `json:"pages"`
 	Cells  []cellDoc `json:"cells"`
 	Accent [2]string `json:"accent"` // notice page: palette 9 and 10, #RRGGBB
+	Geo    [2]int    `json:"geo"`    // notice page: air above the header, offset of the content rows (px)
 }
 
 type alertDoc struct {
@@ -207,6 +208,7 @@ func (p *panel) doc(s *snapshot, e *engine, down, up int, uptime uint32, now tim
 	sort.Slice(d.Panel.Cells, func(i, j int) bool { return d.Panel.Cells[i].Slot < d.Panel.Cells[j].Slot })
 	if p.name == "note" {
 		d.Panel.Accent = [2]string{hex565(p.accent[0]), hex565(p.accent[1])}
+		d.Panel.Geo = [2]int{int(p.geo[0]), int(p.geo[1])}
 	}
 	d.Notices, _ = notes.list(now)
 	list, _, _ := e.view(now)

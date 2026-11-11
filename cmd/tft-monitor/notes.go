@@ -273,8 +273,37 @@ func noteView(m notify.Message) string {
 	return "simple"
 }
 
+// noteGeo is a notice's vertical layout on the board (frameGeo): head is the air above the header text, off how
+// far the content rows sit below the header. Both come from the room the content leaves.
+type noteGeo [2]byte
+
+// The note page in pixels, as the firmware draws it: the header takes noteHeadH plus head, the content rows
+// noteRowH each from there, and the footer sits on the menu at noteFootY.
+const (
+	noteHeadH = 35
+	noteRowH  = 31
+	noteFootY = 266
+	noteAir   = 10 // most air above the header text
+	noteGap   = 12 // most room between the header and a detail notice's content
+)
+
+// geometry: a short notice gets air above its header and its content centred (simple) or a little below the
+// header (detail); a full one keeps only what is left, so nothing ever runs into the footer.
+func geometry(rows int, detail bool) noteGeo {
+	slack := noteFootY - noteHeadH - rows*noteRowH
+	if slack < 0 {
+		slack = 0
+	}
+	head := min(slack/4, noteAir)
+	off := (slack - head) / 2
+	if detail {
+		off = min(off, noteGap)
+	}
+	return noteGeo{byte(head), byte(off)}
+}
+
 // noteCells lays out a notice: row 0 is the header (drawn on the accent), 1..7 the content, 8 the footer.
-func noteCells(n notify.Notice, idx, count int, now time.Time) []cell {
+func noteCells(n notify.Notice, idx, count int, now time.Time) ([]cell, noteGeo) {
 	lv, _, _ := notify.LevelOf(n.Level)
 	head := byte(pAccent)
 	if n.Level == "action" && now.UnixMilli()/700%2 == 1 { // blink
@@ -309,10 +338,6 @@ func noteCells(n notify.Notice, idx, count int, now time.Time) []cell {
 		for _, t := range bl {
 			line(pWhite|sBright, 0, t)
 		}
-		pad := (noteRows - len(rows)) / 2 // centre the block
-		for i := range rows {
-			rows[i].slot = byte(1 + pad + i)
-		}
 	} else {
 		tl := wrap(&advBig, title, noteTextW, 2)
 		al := []string{}
@@ -346,9 +371,9 @@ func noteCells(n notify.Notice, idx, count int, now time.Time) []cell {
 			l := fit(&advBody, ascii(f.Label), 170)
 			line(pWhite|sBright, 0, l+"\t"+fit(&advBold, ascii(f.Value), noteTextW-textW(&advBody, l)-16))
 		}
-		for i := range rows {
-			rows[i].slot = byte(1 + i)
-		}
+	}
+	for i := range rows {
+		rows[i].slot = byte(1 + i)
 	}
 	cs = append(cs, rows...)
 	hint := "Tap to dismiss"
@@ -362,7 +387,7 @@ func noteCells(n notify.Notice, idx, count int, now time.Time) []cell {
 	if n.Expires != nil {
 		when = shortLeft(n.Expires.Sub(now)) + " left"
 	}
-	return append(cs, cell{8, wc, 0, hint + "\t" + when})
+	return append(cs, cell{8, wc, 0, hint + "\t" + when}), geometry(len(rows), detail)
 }
 
 // shortLeft: "45s", "4m", "2h".

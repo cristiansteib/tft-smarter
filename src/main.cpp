@@ -21,7 +21,7 @@ static void pump();   // drain the serial port; safe to call between draw steps 
 #if defined(__AVR_ATmega2560__)
 // The serial protocol this firmware speaks, reported to the PC as "V <proto> <version>" at boot and every 5 s so
 // tft-monitor can tell whether it can drive it (internal/version: Proto, MinProto). Bump it with any frame change.
-#define PROTO 1
+#define PROTO 2
 #ifndef FW_VERSION      // set by tools/fw_version.py from `git describe`
 #define FW_VERSION "dev"
 #endif
@@ -673,7 +673,10 @@ static bool pageMode = false, pageScope = false, pageLogo = false, pageNet = fal
 static bool netVisible() { return pageMode && pageNet && online; }
 static uint16_t lineHash[10];
 #define LROW 31
-#define NOTE_PAD 6   // a notice sits this much lower: room above the header text (the rows have 17 px to spare)
+// a notice's vertical layout, set by the PC from how much it has to show (F_GEO): air above the header text, and
+// how far the content rows sit below the header; the footer (row 8) stays on the menu
+static uint8_t noteHead = 6, noteOff = 0;
+#define NOTE_FOOT_Y (MENU_Y - LROW - 3)
 
 static void drawLine(const uint8_t *p, uint8_t len) {
   if (len < 3 || p[0] > 9) return;
@@ -692,13 +695,14 @@ static void drawLine(const uint8_t *p, uint8_t len) {
   char *val = strchr(txt, '\t');
   if (val) *val++ = 0;
   uint16_t col = PAL[min(style & 15, 10)];
-  int y = 4 + row * LROW + (pageNote ? NOTE_PAD : 0);
+  int y = 4 + row * LROW;
+  if (pageNote) y = row == 0 ? 4 + noteHead : row == 8 ? NOTE_FOOT_Y : y + noteHead + noteOff;
   char sw[6];
   // one pass over the whole row (the swap row is 2 px taller): label, title rule, bar, value
   // a notice: the header row is filled with the accent (dark text), the other rows leave room for the accent strip
   bool head = pageNote && row == 0;
   int x0 = pageNote && !head ? 8 : 0, lx = pageNote && !head ? 22 : 14;
-  if (head) bxBegin(0, 0, W, LROW + 4 + NOTE_PAD, col); else bxBegin(x0, y, W - x0, LROW + (sub ? 2 : 0), BLACK);
+  if (head) bxBegin(0, 0, W, LROW + 4 + noteHead, col); else bxBegin(x0, y, W - x0, LROW + (sub ? 2 : 0), BLACK);
   // label: title in bold 18, rows in regular 12 (cloud when the row has a bar, mist otherwise)
   int base = y + (head ? 24 : big ? 25 : 21);
   bxText(big ? &FreeSansBold18pt7b : &FreeSans12pt7b, head ? BLACK : big || bright ? col : bar ? WHITE : GREY, lx, base, txt);
@@ -754,7 +758,18 @@ static void bandFlush() {   // blank the slots the new band page did not paint (
   bandDirty = 0;
 }
 
-static void noteStrip() { tft.fillRect(0, LROW + 4 + NOTE_PAD, 6, MENU_Y - LROW - 4 - NOTE_PAD, PAL[9]); }
+static void noteStrip() { tft.fillRect(0, LROW + 4 + noteHead, 6, MENU_Y - LROW - 4 - noteHead, PAL[9]); }
+
+// a new layout: the rows move, so the page is blanked and drawn again (the PC resends the rows)
+static void setGeo(uint8_t head, uint8_t off) {
+  head = min((int)head, 30); off = min((int)off, 200);
+  if (head == noteHead && off == noteOff) return;
+  noteHead = head; noteOff = off;
+  if (!pageMode || !pageNote) return;
+  tft.fillRect(0, 0, W, MENU_Y, BLACK);
+  memset(lineHash, 0, sizeof lineHash); lsReset();
+  noteStrip();
+}
 
 // a notice colour changed: on the notice page every row is drawn again in it (the PC resends them)
 static void setAccent(uint8_t idx, uint16_t c) {
@@ -772,6 +787,7 @@ static void drawPanelItem() {
   if (it.type == 8) setScreen(it.d[0]);    // screen switch: 0 dashboard, 1 full page, 2 full page + clear
   else if (it.type == 9) { if (pageMode) drawLine(it.d, it.len); }   // full-screen row
   else if (it.type == 12) setAccent(it.d[0], it.d[1] | it.d[2] << 8);
+  else if (it.type == 13) setGeo(it.d[0], it.d[1]);
   else if (pageMode) { /* band/cell frames are stale while a full page is up */ }
   else if (it.type == 5) drawCell(it.d, it.len);
   else drawBand(it.d, it.len);
@@ -1457,7 +1473,7 @@ static void ssTick() {
 }
 
 // ---- binary protocol: 0xAA 0x55 | type | len | payload | crc8(type,len,payload) ----
-enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7, F_SCREEN = 8, F_LINE = 9, F_PAGE = 10, F_CMD = 11, F_COLOR = 12 };
+enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7, F_SCREEN = 8, F_LINE = 9, F_PAGE = 10, F_CMD = 11, F_COLOR = 12, F_GEO = 13 };
 static bool menuDirty = false;    // the highlighted menu entry (or its pin) changed
 static bool menuPinned = false;   // the PC says the current page is pinned
 static uint8_t menuSlot = 255;    // which menu entry the PC says is showing (255 = none)
@@ -1501,7 +1517,7 @@ static void handleFrame(uint8_t type, const uint8_t *p, uint8_t len) {
     if (menuSlot != p[0] || menuPinned != pin) { menuSlot = p[0]; menuPinned = pin; menuDirty = true; }
   } else if (type == F_CMD && len == 1) {
     if (p[0] == 1) doCal = true;
-  } else if (type == F_BAND || type == F_CELL || type == F_LINE || (type == F_SCREEN && len == 1) || (type == F_COLOR && len == 3)) {
+  } else if (type == F_BAND || type == F_CELL || type == F_LINE || (type == F_SCREEN && len == 1) || (type == F_COLOR && len == 3) || (type == F_GEO && len == 2)) {
     enqueue(type, p, len);
   }
 }

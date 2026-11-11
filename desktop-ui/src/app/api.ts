@@ -23,7 +23,7 @@ export interface State {
   psi: [number, number, number];
   topCpu: Proc[];
   topMem: Proc[];
-  panel: { page: string; sub: number; subs: number; pin: string; full: boolean; pages: Page[]; cells: Cell[]; accent: [string, string] };
+  panel: { page: string; sub: number; subs: number; pin: string; full: boolean; pages: Page[]; cells: Cell[]; accent: [string, string]; geo?: [number, number] };
   alerts: Alert[];
   docker: Record<string, number>;
   hog: { cpu: boolean; mem: boolean };

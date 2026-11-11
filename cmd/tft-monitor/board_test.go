@@ -27,7 +27,7 @@ func TestBoardCompat(t *testing.T) {
 	if a, _ := notes.list(time.Now()); len(a) != 1 || a[0].ID != "tft-compat" {
 		t.Fatalf("a mismatch shows one notice: %+v", a)
 	}
-	boardLine("V 1 v0.16.0-3-gabc\r\n")
+	boardLine("V 2 v0.16.0-3-gabc\r\n")
 	if d := boardState(); d.Compatible == nil || !*d.Compatible || d.Firmware != "v0.16.0-3-gabc" || d.Proto != version.Proto {
 		t.Fatalf("current firmware fits: %+v", d)
 	}
