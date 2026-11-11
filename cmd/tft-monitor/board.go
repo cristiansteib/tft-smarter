@@ -250,12 +250,41 @@ func updateSelf() (string, error) {
 	return rel.Version, nil
 }
 
-// restart runs the new binary in this process (same pid, so systemd sees nothing but a short reconnect).
+// restart runs the new binary in this process (same pid, so systemd sees nothing but a short reconnect). Nothing
+// open may survive into it: the serial library opens the port exclusively and without close-on-exec, and the new
+// process would find it busy, held by itself.
 func restart() {
 	exe, err := selfupdate.Exe()
 	if err == nil {
+		forEachFD(func(fd int, _ string) { syscall.CloseOnExec(fd) })
 		err = syscall.Exec(exe, os.Args, os.Environ())
 	}
 	log.Printf("restart after the update failed (%v): exiting so the service restarts", err)
 	os.Exit(0)
+}
+
+// forEachFD calls f with every open descriptor above stderr and what it points at.
+func forEachFD(f func(fd int, target string)) {
+	ents, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil || fd <= 2 {
+			continue
+		}
+		t, _ := os.Readlink("/proc/self/fd/" + e.Name())
+		f(fd, t)
+	}
+}
+
+// closeInheritedTTYs closes serial ports an older build left open across its restart (0.16.2 did): this process
+// opened none yet, so any it holds would only keep the board busy.
+func closeInheritedTTYs() {
+	forEachFD(func(fd int, t string) {
+		if strings.HasPrefix(t, "/dev/tty") {
+			syscall.Close(fd)
+		}
+	})
 }

@@ -487,6 +487,7 @@ func main() {
 	default:
 		log.Fatalf("unknown command %q (use: install, uninstall, version, self-update)", cmd)
 	}
+	closeInheritedTTYs()
 	cpuT := cpuTempFile()
 	collectors, eng, pan, gpus = startCollectors(), newEngine(), newPanel(), startGPU()
 	loadCfg()
