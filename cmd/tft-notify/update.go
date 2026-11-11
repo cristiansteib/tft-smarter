@@ -159,7 +159,9 @@ func cmdSelfUpdate(a *args) error {
 		if err != nil {
 			return fmt.Errorf("mise installed tft-notify but is not on PATH: run `mise upgrade %s`", selfupdate.MiseTool)
 		}
-		c := exec.CommandContext(ctx, mise, "upgrade", "--yes", selfupdate.MiseTool)
+		c := exec.CommandContext(ctx, mise, "upgrade", "--yes", "--quiet", selfupdate.MiseTool)
+		// mise keeps the list of versions for an hour: without this it would not know the release just found
+		c.Env = append(os.Environ(), "MISE_FETCH_REMOTE_VERSIONS_CACHE=0s")
 		c.Stdout, c.Stderr = os.Stderr, os.Stderr // stdout stays for --json
 		if err := c.Run(); err != nil {
 			return fmt.Errorf("mise upgrade %s: %w", selfupdate.MiseTool, err)
@@ -167,8 +169,14 @@ func cmdSelfUpdate(a *args) error {
 		if out, err := exec.Command(mise, "which", "tft-notify").Output(); err == nil {
 			exe = strings.TrimSpace(string(out))
 		}
-		data["updated"], data["by"] = true, "mise"
-		fmt.Fprintf(&b, "updated tft-notify %s -> %s (with mise)\n", cur, rel.Version)
+		// say what mise did, not what was asked of it
+		out, _ := exec.Command(exe, "version").Output()
+		got := strings.TrimPrefix(strings.TrimSpace(string(out)), "tft-notify ")
+		if !version.Newer(got, cur) {
+			return fmt.Errorf("mise did not upgrade tft-notify (still %s, %s is out): check `mise -C / config` lists %s", cur, rel.Version, selfupdate.MiseTool)
+		}
+		data["updated"], data["by"], data["to"] = true, "mise", got
+		fmt.Fprintf(&b, "updated tft-notify %s -> %s (with mise)\n", cur, got)
 	default:
 		sums, err := selfupdate.Sums(ctx, rel)
 		if err != nil {
