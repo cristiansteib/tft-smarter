@@ -192,6 +192,9 @@ func cmdSelfUpdate(a *args) error {
 	case err == nil:
 		data["monitor"] = r.Status
 		fmt.Fprintf(&b, "tft-monitor: %s\n", r.Status)
+	case err != nil && strings.Contains(err.Error(), "not allowed"): // another account's monitor: it keeps itself updated
+		data["monitor"] = "runs under another account and updates itself"
+		b.WriteString("tft-monitor runs under another account and updates itself\n")
 	case !errors.Is(err, notify.ErrNotRunning):
 		data["monitor"] = err.Error()
 		fmt.Fprintf(&b, "tft-monitor: %v\n", err)
