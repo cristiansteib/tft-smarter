@@ -47,7 +47,7 @@ func TestHelpJSON(t *testing.T) {
 	if code != 0 || json.Unmarshal([]byte(out), &doc) != nil {
 		t.Fatalf("--help-json: %d %q", code, out)
 	}
-	for _, k := range []string{"commands", "levels", "exitCodes", "message", "examples"} {
+	for _, k := range []string{"commands", "levels", "exit", "message", "json"} {
 		if doc[k] == nil {
 			t.Errorf("--help-json lacks %q", k)
 		}
@@ -130,10 +130,14 @@ func TestSendAndWait(t *testing.T) {
 		t.Fatalf("sent %+v", m)
 	}
 	// a JSON message, with a flag overriding one of its fields
-	fake(t, func(r notify.Request) any { return notify.Notice{Message: *r.Message} })
+	got = fake(t, func(r notify.Request) any { return notify.Notice{Message: *r.Message} })
 	code, out = capture(t, "--json", "-m", `{"level":"warn","title":"Disk 91%","fields":{"host":"nas","b":"2"},"ttl":0}`, "-c", "pink")
-	if code != 0 || !strings.Contains(out, `"color":"#FF4FA3"`) || !strings.Contains(out, `"label":"b"`) || !strings.Contains(out, `"ttl":0`) {
-		t.Fatalf("-m: %d %s", code, out)
+	m = (*got)[0].Message
+	if code != 0 || m.Color != "#FF4FA3" || m.Fields[0].Label != "b" || m.TTL == nil || *m.TTL != 0 || m.Level != "warn" {
+		t.Fatalf("-m: %d %s %+v", code, out, m)
+	}
+	if strings.Contains(out, "notice") || len(out) > 40 {
+		t.Fatalf("send --json must stay short for agents: %s", out)
 	}
 }
 

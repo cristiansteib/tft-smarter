@@ -321,7 +321,7 @@ func cmdSend(a *args) error {
 		return daemonErr(err)
 	}
 	if !a.flag("wait") {
-		emit(a, map[string]any{"id": n.ID, "notice": n}, n.ID)
+		emit(a, map[string]any{"id": n.ID}, n.ID)
 		return nil
 	}
 	return waitFor(a, n.ID)
@@ -339,9 +339,9 @@ func cmdList(a *args) error {
 	if err := notify.Call(notify.Request{Cmd: "notices"}, &r); err != nil {
 		return daemonErr(err)
 	}
-	data := map[string]any{"active": r.Active}
+	data := map[string]any{"active": brief(r.Active)}
 	if a.flag("all") {
-		data["recent"] = r.Recent
+		data["recent"] = brief(r.Recent)
 	}
 	var b strings.Builder
 	line := func(n notify.Notice) {
@@ -370,6 +370,30 @@ func cmdList(a *args) error {
 	}
 	emit(a, data, strings.TrimRight(b.String(), "\n"))
 	return nil
+}
+
+type row struct {
+	ID    string `json:"id"`
+	Level string `json:"level"`
+	Title string `json:"title"`
+	State string `json:"state,omitempty"` // only when not active
+	Left  *int   `json:"left,omitempty"`  // seconds until it expires
+}
+
+// brief: what an agent needs from a list, not the whole notice (that is `get ID`).
+func brief(ns []notify.Notice) []row {
+	out := []row{}
+	for _, n := range ns {
+		r := row{ID: n.ID, Level: n.Level, Title: n.Title}
+		if n.State != "active" {
+			r.State = n.State
+		} else if n.Expires != nil {
+			l := int(time.Until(*n.Expires).Seconds())
+			r.Left = &l
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func one(a *args) (string, error) {
@@ -409,7 +433,7 @@ func waitFor(a *args, id string) error {
 		if err := notify.Call(notify.Request{Cmd: "notice", ID: id}, &n); err != nil {
 			return daemonErr(err)
 		}
-		data := map[string]any{"id": id, "notice": n, "result": n.State}
+		data := map[string]any{"id": id, "result": n.State}
 		switch n.State {
 		case "dismissed":
 			data["dismissedBy"] = n.DismissedBy
@@ -532,47 +556,49 @@ Also: --help-json (everything above as JSON), --version. Exit codes: 0 ok, 1 err
 	return b.String()
 }
 
+// helpJSON is the discovery document for agents: compact, everything needed to call the CLI and nothing else.
 func helpJSON() string {
-	type lvl struct {
-		notify.Level
-		TTLText string `json:"ttlText"`
-	}
-	lv := make([]lvl, len(notify.Levels))
-	for i, l := range notify.Levels {
-		lv[i] = lvl{l, "until tapped"}
+	lv := map[string]string{}
+	for _, l := range notify.Levels {
+		t := "until tapped"
 		if l.TTL > 0 {
-			lv[i].TTLText = human(l.TTL)
+			t = human(l.TTL)
 		}
+		lv[l.Name] = l.Use + "; " + t
 	}
-	names := make([]string, 0, len(notify.Colors))
-	for k := range notify.Colors {
-		names = append(names, k)
+	cmds := map[string]any{}
+	for _, c := range commands {
+		fl := map[string]string{}
+		for _, o := range c.Flags {
+			if o.Name == "json" {
+				continue
+			}
+			k := "--" + o.Name
+			if o.Short != "" {
+				k = "-" + o.Short + "|" + k
+			}
+			if o.Arg != "" {
+				k += " " + o.Arg
+			}
+			if o.Repeat {
+				k += " (repeat)"
+			}
+			fl[k] = o.Help
+		}
+		e := map[string]any{"usage": c.Usage, "does": c.Summary}
+		if len(fl) > 0 {
+			e["flags"] = fl
+		}
+		cmds[c.Name] = e
 	}
-	slices.Sort(names)
 	doc := map[string]any{
-		"name": "tft-notify", "version": version(),
-		"summary":  "Show a notice on the user's TFT desk screen. It shows full screen until it expires or the user taps it (tap = dismiss, swipe = next, hold = dismiss all).",
-		"usage":    "tft-notify [send] [flags] TITLE [BODY...] | tft-notify COMMAND [flags]",
-		"commands": commands, "levels": lv, "views": map[string]string{
-			"auto": "detail when there is a body over 70 chars, an action, progress or fields; else simple", "simple": "big title (up to 3 lines) and a short body", "detail": "title, body, action, progress bar and label/value fields",
-		},
-		"colors": names, "exitCodes": exitCodes, "socket": notify.Socket(),
-		"message": map[string]string{
-			"id": "string, optional: reuse to update the same notice", "level": "info|success|warn|error|action", "title": "string, required (<=120)",
-			"body": "string (<=600, wrapped)", "source": "string (<=24)", "action": "string (<=120)", "progress": "int 0..100",
-			"fields": `{"label":"value"} or [{"label":..,"value":..}] (<=6)`, "color": "#RRGGBB | #RGB | name", "view": "auto|simple|detail", "ttl": "int seconds, 0 = until tapped",
-		},
-		"output": "with --json every command prints one JSON object: {\"ok\":true,...} or {\"ok\":false,\"error\":..,\"code\":N}. send prints {id, notice}; with --wait also {result: dismissed|expired|timeout, dismissedBy}.",
-		"env":    map[string]string{"TFT_NOTIFY_SOURCE": "default --source", "XDG_RUNTIME_DIR": "where the socket lives"},
-		"examples": []string{
-			`tft-notify -l success "Tests pass" "142 passed in 38s"`,
-			`tft-notify -l action -s claude -a "Answer in the terminal" "Need your OK to push"`,
-			`tft-notify --id build -p 60 "Building firmware"`,
-			`tft-notify --json -l action --wait --timeout 10m "Plug in the board"`,
-			`tft-notify --json -m '{"level":"error","title":"CI failed","fields":{"job":"lint"}}'`,
-		},
+		"tft-notify": "show a notice on the user's desk screen until it expires or they tap it",
+		"commands":   cmds, "levels": lv,
+		"json":    "--json on any command: one line, {\"ok\":true,...} or {\"ok\":false,\"error\":..,\"code\":N}; send gives {id}, --wait adds {result: dismissed|expired|timeout}",
+		"exit":    exitCodes,
+		"message": "-m JSON keys: id level title body source action progress fields({k:v}) color view ttl(seconds, 0=until tapped)",
 	}
-	b, _ := json.MarshalIndent(doc, "", "  ")
+	b, _ := json.Marshal(doc)
 	return string(b)
 }
 

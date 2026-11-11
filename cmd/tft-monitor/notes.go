@@ -307,7 +307,7 @@ func noteCells(n notify.Notice, idx, count int, now time.Time) []cell {
 			line(pWhite, 0, "") // a quiet gap between title and body
 		}
 		for _, t := range bl {
-			line(pGrey|sBright, 0, t)
+			line(pWhite|sBright, 0, t)
 		}
 		pad := (noteRows - len(rows)) / 2 // centre the block
 		for i := range rows {
@@ -344,7 +344,7 @@ func noteCells(n notify.Notice, idx, count int, now time.Time) []cell {
 		}
 		for _, f := range n.Fields[:fl] {
 			l := fit(&advBody, ascii(f.Label), 170)
-			line(pWhite, 0, l+"\t"+fit(&advBold, ascii(f.Value), noteTextW-textW(&advBody, l)-16))
+			line(pWhite|sBright, 0, l+"\t"+fit(&advBold, ascii(f.Value), noteTextW-textW(&advBody, l)-16))
 		}
 		for i := range rows {
 			rows[i].slot = byte(1 + i)
