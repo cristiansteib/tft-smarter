@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -362,6 +363,9 @@ func run(port serial.Port, cpuT string) error {
 	defer tick.Stop()
 	for n := 1; ; n++ {
 		<-tick.C
+		if takeFlash() {
+			return errFlash
+		}
 		now := time.Now()
 		dt := now.Sub(t0).Seconds()
 		t0 = now
@@ -445,6 +449,8 @@ func run(port serial.Port, cpuT string) error {
 
 func main() {
 	portName := flag.String("port", "/dev/ttyACM0", "serial port of the Arduino")
+	hexPath := flag.String("hex", "", "flash: the firmware .hex to write (default: the firmware of this release)")
+	fwSince := flag.String("firmware-since", "", "compat: the oldest release with this firmware")
 	autoUpd := flag.Bool("auto-update", true, "keep a released build on the latest release (also off with "+selfupdate.OptOutEnv+"=1)")
 	shared := flag.Bool("shared", true, "also take notices from other users of this machine (abstract socket "+notify.SharedSocket+")")
 	cmd := ""
@@ -453,6 +459,9 @@ func main() {
 		os.Args = append(os.Args[:1:1], os.Args[2:]...)
 	}
 	flag.Parse()
+	if cmd == "" && flag.NArg() > 0 { // flags first: tft-monitor -port X flash
+		cmd = flag.Arg(0)
+	}
 	switch cmd {
 	case "install":
 		if err := installService(*portName); err != nil {
@@ -470,7 +479,13 @@ func main() {
 		fmt.Println("tft-monitor", version.Get(), "- firmware protocols", version.MinProto, "to", version.Proto, "- api", version.API)
 		return
 	case "compat": // what the release pipeline publishes as compat.json
-		fmt.Printf("{\"proto\":%d,\"minProto\":%d,\"api\":%d}\n", version.Proto, version.MinProto, version.API)
+		b, _ := json.Marshal(selfupdate.Compat{Proto: version.Proto, MinProto: version.MinProto, API: version.API, FirmwareSince: strings.TrimPrefix(*fwSince, "v")})
+		fmt.Println(string(b))
+		return
+	case "flash":
+		if err := cmdFlash(*portName, *hexPath); err != nil {
+			log.Fatal(err)
+		}
 		return
 	case "self-update":
 		to, err := updateSelf()
@@ -485,7 +500,7 @@ func main() {
 		return
 	case "":
 	default:
-		log.Fatalf("unknown command %q (use: install, uninstall, version, self-update)", cmd)
+		log.Fatalf("unknown command %q (use: install, uninstall, version, self-update, flash)", cmd)
 	}
 	closeInheritedTTYs()
 	cpuT := cpuTempFile()
@@ -512,6 +527,9 @@ func main() {
 			p.Close()
 		}
 		disconnected()
+		if runFlash(*portName) {
+			continue
+		}
 		log.Printf("serial error: %v - retrying", err)
 		time.Sleep(2 * time.Second)
 	}

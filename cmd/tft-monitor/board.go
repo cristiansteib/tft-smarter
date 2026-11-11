@@ -91,6 +91,7 @@ func boardCheck() {
 	if d.Compatible == nil {
 		return
 	}
+	autoFlash(d)
 	if *d.Compatible { // fits (again): the warning has done its job
 		board.Lock()
 		warned := board.warned != ""
@@ -119,7 +120,7 @@ func boardCheck() {
 	notes.add(notify.Message{ID: "tft-compat", Level: "warn", Source: "tft-monitor", TTL: &ttl,
 		Title:  "Screen and monitor do not match",
 		Body:   fmt.Sprintf("Firmware %s speaks protocol %d; tft-monitor %s speaks %d..%d.", fw, d.Proto, version.Get(), version.MinProto, version.Proto),
-		Fields: notify.Fields{{Label: "fix", Value: map[bool]string{true: "flash the firmware", false: "tft-notify self-update"}[d.Proto < version.MinProto]}}},
+		Fields: notify.Fields{{Label: "fix", Value: map[bool]string{true: "tft-monitor flash", false: "tft-notify self-update"}[d.Proto < version.MinProto]}}},
 		time.Now())
 	if d.Proto > version.Proto {
 		kickUpdate()
@@ -226,12 +227,15 @@ func updateSelf() (string, error) {
 		say("v" + rel.Version + " is out; this binary is mise's: mise upgrade " + selfupdate.MiseTool)
 		return "", nil
 	}
-	// the new daemon has to be able to drive the firmware that is on the board, or the screen would go dark
+	// the new daemon has to be able to drive the firmware on the board, or flash its own over it: it does that only
+	// over released firmware, never over a build from source somebody is working on
 	if c, ok := selfupdate.Compatibility(ctx, rel); ok {
 		if b := boardState(); b.Compatible != nil {
-			if fits, _ := version.Fits(b.Proto, c.MinProto, c.Proto); !fits {
-				msg := fmt.Sprintf("v%s needs firmware protocol %d..%d, the board has %d: flash the firmware, then it updates", rel.Version, c.MinProto, c.Proto, b.Proto)
-				say(msg)
+			fits, _ := version.Fits(b.Proto, c.MinProto, c.Proto)
+			_, ships := rel.Assets[selfupdate.FirmwareAsset]
+			dev := b.Firmware != "" && !version.Released(b.Firmware)
+			if !fits && (dev || !ships) {
+				say(fmt.Sprintf("v%s needs firmware protocol %d..%d and the board has %d (%s): flash it, then it updates", rel.Version, c.MinProto, c.Proto, b.Proto, b.Firmware))
 				return "", nil
 			}
 		}

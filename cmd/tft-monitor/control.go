@@ -255,6 +255,7 @@ type ctlReq struct {
 	By       string          `json:"by"`      // dismiss: who did it (cli, ui)
 	Page     string          `json:"page"`
 	Settings *settings       `json:"settings"`
+	Path     string          `json:"path"` // flash: a .hex ("" = this release's firmware)
 }
 
 type ctlResp struct {
@@ -352,6 +353,11 @@ func handleCtl(r ctlReq, e *engine) ctlResp {
 		return ctlResp{OK: true, Data: map[string]any{"dismissed": ids}}
 	case "version":
 		return ctlResp{OK: true, Data: versionInfo()}
+	case "flash":
+		if err := flashFile(r.Path); err != nil {
+			return ctlResp{Error: err.Error()}
+		}
+		return ctlResp{OK: true}
 	case "update": // look for a release now; a newer one that fits the board is installed and run
 		to, err := updateSelf()
 		if err != nil {
@@ -372,10 +378,11 @@ type versionDoc struct {
 	MinProto int       `json:"minProto"`
 	Board    boardDoc  `json:"board"`
 	Update   updateDoc `json:"update"`
+	Flashing string    `json:"flashing,omitempty"` // progress while the board is being flashed
 }
 
 func versionInfo() versionDoc {
-	return versionDoc{Version: version.Get(), API: version.API, Proto: version.Proto, MinProto: version.MinProto, Board: boardState(), Update: updateState()}
+	return versionDoc{Version: version.Get(), API: version.API, Proto: version.Proto, MinProto: version.MinProto, Board: boardState(), Update: updateState(), Flashing: flashProgress()}
 }
 
 // listenCtl serves the control socket, private to this user. With shared, it also serves the notice commands to

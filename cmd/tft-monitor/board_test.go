@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cristiansteib/tft-smarter/internal/selfupdate"
 	"github.com/cristiansteib/tft-smarter/internal/version"
 )
 
@@ -39,6 +40,28 @@ func TestBoardCompat(t *testing.T) {
 		t.Fatalf("firmware newer than the daemon does not fit: %+v", d)
 	}
 	boardDown()
+}
+
+func TestNeedFlash(t *testing.T) {
+	yes, no := true, false
+	c := selfupdate.Compat{Proto: 1, MinProto: 1, FirmwareSince: "0.17.0"}
+	for _, x := range []struct {
+		d    boardDoc
+		want bool
+	}{
+		{boardDoc{Compatible: &no, Proto: 0}, true},                                   // unversioned, too old
+		{boardDoc{Compatible: &no, Proto: 9, Firmware: "v9.0.0"}, false},              // newer: update the daemon instead
+		{boardDoc{Compatible: &yes, Proto: 1, Firmware: "v0.16.3"}, true},             // older release, firmware changed since
+		{boardDoc{Compatible: &yes, Proto: 1, Firmware: "v0.17.0"}, false},            // already it
+		{boardDoc{Compatible: &yes, Proto: 1, Firmware: "v0.17.2"}, false},            // same source, later release
+		{boardDoc{Compatible: &yes, Proto: 1, Firmware: "v0.16.1-2-gb40debe"}, false}, // a build from source
+		{boardDoc{Compatible: &no, Proto: 0, Firmware: "v0.16.1-dirty"}, false},       // even when it does not fit
+		{boardDoc{}, false}, // not heard from yet
+	} {
+		if got := needFlash(x.d, c); got != x.want {
+			t.Errorf("%+v: %v", x.d, got)
+		}
+	}
 }
 
 func TestSharedSocketCmds(t *testing.T) {

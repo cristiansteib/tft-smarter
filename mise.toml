@@ -23,8 +23,8 @@ depends = ["build"]
 run = "bin/tft-monitor -port $TFT_PORT"
 
 [tasks.flash]
-description = "Upload the firmware (stops the user service while flashing, then restarts it)"
-run = ["systemctl --user stop tft-monitor || true", "pio run -t upload", "systemctl --user start tft-monitor || true"]
+description = "Build the firmware and flash it (through the running tft-monitor, which owns the port)"
+run = ["pio run", "go run ./cmd/tft-monitor flash -port $TFT_PORT -hex .pio/build/megaatmega2560/firmware.hex"]
 
 [tasks.ui]
 description = "Desktop app in dev mode (Tauri + Angular)"

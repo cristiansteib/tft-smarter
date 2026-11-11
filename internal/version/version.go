@@ -86,7 +86,7 @@ func parse(v string) ([3]int, bool) {
 func Fits(proto, min, max int) (bool, string) {
 	switch {
 	case proto < min:
-		return false, "the board's firmware is too old for this tft-monitor: flash it (`mise run flash` in the tft-smarter repo)"
+		return false, "the board's firmware is too old for this tft-monitor: flash it (`tft-monitor flash`)"
 	case proto > max:
 		return false, "tft-monitor is too old for the board's firmware: update it (`tft-notify self-update`)"
 	}

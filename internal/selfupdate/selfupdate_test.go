@@ -27,6 +27,10 @@ func fake(t *testing.T, bin []byte, sum string) {
 			w.Write(bin)
 		case "/sums":
 			fmt.Fprintf(w, "%s  %s\nnot a line\n", sum, Asset("tft-notify"))
+		case "/repos/" + Repo + "/releases/tags/v0.17.0":
+			fmt.Fprintf(w, `{"tag_name":"v0.17.0","assets":[{"name":"firmware.hex","browser_download_url":"%s/bin"},{"name":"checksums.txt","browser_download_url":"%s/sums2"}]}`, srv.URL, srv.URL)
+		case "/sums2":
+			fmt.Fprintf(w, "%s  firmware.hex\n", sum)
 		case "/compat":
 			w.Write([]byte(`{"proto":2,"minProto":1,"api":1}`))
 		default:
@@ -74,6 +78,11 @@ func TestInstall(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(dest), ".tft-notify-*")); len(left) != 0 {
 		t.Fatalf("temp files left: %v", left)
+	}
+	if r, err := ByTag(ctx, "0.17.0"); err != nil {
+		t.Fatal(err)
+	} else if b, err := Fetch(ctx, r, FirmwareAsset); err != nil || string(b) != string(bin) {
+		t.Fatalf("fetch: %q %v", b, err)
 	}
 	if err := Install(ctx, rel, sums, "tft-monitor", dest); err == nil {
 		t.Fatal("a program the release does not carry must fail")

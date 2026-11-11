@@ -264,10 +264,14 @@ type Request struct {
 	ID      string   `json:"id,omitempty"`
 	All     bool     `json:"all,omitempty"`
 	By      string   `json:"by,omitempty"`
+	Path    string   `json:"path,omitempty"` // flash: a firmware .hex (default: the monitor's own release)
 }
 
 // Call sends one request and decodes the reply's data into out (which may be nil).
-func Call(req Request, out any) error {
+func Call(req Request, out any) error { return CallTimeout(req, out, 5*time.Second) }
+
+// CallTimeout is Call for a command that takes a while (flash).
+func CallTimeout(req Request, out any, timeout time.Duration) error {
 	c, err := net.DialTimeout("unix", Socket(), 2*time.Second)
 	if err != nil { // not this user's daemon: another user's, shared with everyone
 		c, err = net.DialTimeout("unix", SharedSocket, 2*time.Second)
@@ -276,7 +280,7 @@ func Call(req Request, out any) error {
 		return fmt.Errorf("%w (no socket at %s or %s): start it with `tft-monitor` or `systemctl --user start tft-monitor`", ErrNotRunning, Socket(), SharedSocket)
 	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
+	c.SetDeadline(time.Now().Add(timeout))
 	if err := json.NewEncoder(c).Encode(req); err != nil {
 		return err
 	}

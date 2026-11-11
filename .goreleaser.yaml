@@ -2,11 +2,11 @@ version: 2
 
 project_name: tft-smarter
 
-# compat.json says which firmware protocols this release's tft-monitor drives. A running tft-monitor reads it
-# before it updates itself, and stays where it is when the new one could not drive the board's firmware.
+# firmware.hex is the board's firmware, which tft-monitor flashes itself; compat.json says which firmware protocols
+# this release's tft-monitor drives and since which release the firmware is the same (tools/release-assets.sh).
 before:
   hooks:
-    - sh -c "mkdir -p build && go run ./cmd/tft-monitor compat > build/compat.json"
+    - sh tools/release-assets.sh {{ .Tag }}
 
 builds:
   # The CLI: on every machine (it only talks to a unix socket).
@@ -43,6 +43,7 @@ checksum:
   name_template: checksums.txt
   extra_files:
     - glob: build/compat.json
+    - glob: build/firmware.hex
 
 # Every download is checked against checksums.txt; signing that list (keyless, tied to this repository's
 # workflow) is what makes the check mean something:
@@ -71,6 +72,7 @@ release:
   replace_existing_artifacts: true
   extra_files:
     - glob: build/compat.json
+    - glob: build/firmware.hex
 
 changelog:
   disable: true

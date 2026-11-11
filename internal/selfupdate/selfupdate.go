@@ -48,12 +48,18 @@ type Release struct {
 	Pending string `json:"pending,omitempty"`
 }
 
-// Compat is what a release's tft-monitor drives.
+// Compat is what a release's tft-monitor drives, and which firmware it ships.
 type Compat struct {
 	Proto    int `json:"proto"`
 	MinProto int `json:"minProto"`
 	API      int `json:"api"`
+	// FirmwareSince is the oldest release whose firmware is built from the same source as this one's: a board on
+	// that release or later already runs this firmware, and is not flashed again for a version string.
+	FirmwareSince string `json:"firmwareSince,omitempty"`
 }
+
+// FirmwareAsset is the firmware a release ships, built for the Mega 2560.
+const FirmwareAsset = "firmware.hex"
 
 // Asset is the raw binary of a program for this platform.
 func Asset(program string) string {
@@ -125,6 +131,60 @@ func Latest(ctx context.Context) (Release, error) {
 		return Release{}, fmt.Errorf("v%s has no binaries attached yet: it is still being published, try again shortly", pending)
 	}
 	return Release{}, errors.New("no release published yet")
+}
+
+// ByTag is the release of one version, with its files.
+func ByTag(ctx context.Context, ver string) (Release, error) {
+	resp, err := get(ctx, fmt.Sprintf("%s/repos/%s/releases/tags/v%s", API, Repo, strings.TrimPrefix(ver, "v")))
+	if err != nil {
+		return Release{}, fmt.Errorf("looking up release v%s: %w", ver, err)
+	}
+	defer resp.Body.Close()
+	var r struct {
+		Tag    string `json:"tag_name"`
+		Assets []struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return Release{}, err
+	}
+	rel := Release{Version: strings.TrimPrefix(r.Tag, "v"), Assets: map[string]string{}}
+	for _, a := range r.Assets {
+		rel.Assets[a.Name] = a.URL
+	}
+	return rel, nil
+}
+
+// Fetch downloads one of the release's files into memory, checked against its checksums.
+func Fetch(ctx context.Context, rel Release, name string) ([]byte, error) {
+	url, ok := rel.Assets[name]
+	if !ok {
+		return nil, fmt.Errorf("v%s has no %s", rel.Version, name)
+	}
+	sums, err := Sums(ctx, rel)
+	if err != nil {
+		return nil, err
+	}
+	want, ok := sums[name]
+	if !ok {
+		return nil, fmt.Errorf("%s is not in %s, so it cannot be checked", name, checksums)
+	}
+	resp, err := get(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.Sum256(b)
+	if got := hex.EncodeToString(h[:]); got != want {
+		return nil, fmt.Errorf("%s does not match its checksum: not used", name)
+	}
+	return b, nil
 }
 
 // Sums is the release's list of what each of its files should hash to. A release without one gives nothing:
