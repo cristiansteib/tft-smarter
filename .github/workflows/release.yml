@@ -1,0 +1,72 @@
+# Two ways in, as in multiversectl:
+#   * a push to main: semantic-release reads the (conventional) commits, decides the version, creates the tag and
+#     a draft release, then GoReleaser attaches the binaries and publishes it;
+#   * a tag pushed by hand: GoReleaser alone.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write # keyless cosign signing of checksums.txt
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  from-commits:
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          extra_plugins: conventional-changelog-conventionalcommits@8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.semantic.outputs.new_release_published == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - if: steps.semantic.outputs.new_release_published == 'true'
+        run: git fetch --tags --force
+      - if: steps.semantic.outputs.new_release_published == 'true'
+        uses: sigstore/cosign-installer@v3
+      - if: steps.semantic.outputs.new_release_published == 'true'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: v${{ steps.semantic.outputs.new_release_version }}
+
+  from-tag:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - uses: sigstore/cosign-installer@v3
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

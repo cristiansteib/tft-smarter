@@ -250,12 +250,16 @@ func Socket() string {
 	return d + "/tft-monitor.ctl"
 }
 
+// SharedSocket is where the daemon also takes notices from the machine's other users: an abstract socket (Linux),
+// so it needs no file another user could not open.
+var SharedSocket = "@tft-monitor"
+
 // ErrNotRunning means the daemon's socket is not there or refuses connections.
 var ErrNotRunning = errors.New("tft-monitor is not running")
 
 // Request is one control-socket command.
 type Request struct {
-	Cmd     string   `json:"cmd"` // notify | notices | notice | dismiss
+	Cmd     string   `json:"cmd"` // notify | notices | notice | dismiss | version | update
 	Message *Message `json:"message,omitempty"`
 	ID      string   `json:"id,omitempty"`
 	All     bool     `json:"all,omitempty"`
@@ -265,8 +269,11 @@ type Request struct {
 // Call sends one request and decodes the reply's data into out (which may be nil).
 func Call(req Request, out any) error {
 	c, err := net.DialTimeout("unix", Socket(), 2*time.Second)
+	if err != nil { // not this user's daemon: another user's, shared with everyone
+		c, err = net.DialTimeout("unix", SharedSocket, 2*time.Second)
+	}
 	if err != nil {
-		return fmt.Errorf("%w (no socket at %s): start it with `tft-monitor` or `systemctl --user start tft-monitor`", ErrNotRunning, Socket())
+		return fmt.Errorf("%w (no socket at %s or %s): start it with `tft-monitor` or `systemctl --user start tft-monitor`", ErrNotRunning, Socket(), SharedSocket)
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(5 * time.Second))

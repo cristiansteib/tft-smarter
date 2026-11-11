@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cristiansteib/tft-smarter/internal/notify"
+	"github.com/cristiansteib/tft-smarter/internal/version"
 )
 
 // settings are the knobs the desktop UI can change at runtime; they persist in the user config dir.
@@ -124,6 +125,7 @@ type stateDoc struct {
 	Docker  map[string]int  `json:"docker"`
 	Hog     map[string]bool `json:"hog"`
 	Notices []notify.Notice `json:"notices"` // active, in screen order
+	Board   boardDoc        `json:"board"`   // which firmware, and whether this daemon drives it
 }
 
 type diskDoc struct {
@@ -173,7 +175,7 @@ var latest atomic.Pointer[stateDoc]
 var allPages = []string{"dash", "cpu", "ram", "net", "claude", "docker", "system", "top", "rollcpu", "rollmem"}
 
 func (p *panel) doc(s *snapshot, e *engine, down, up int, uptime uint32, now time.Time) *stateDoc {
-	d := &stateDoc{Connected: true, Updated: now}
+	d := &stateDoc{Connected: true, Updated: now, Board: boardState()}
 	g := &d.Gauges
 	g.CPU, g.RAM, g.Swap, g.CPUT, g.GPU, g.GPUT, g.VRAM = s.cpu, s.ram, s.swap, s.cpuT, s.gpu, s.gpuT, s.vram
 	g.GPUW, g.GPULimit, g.NVMeT, g.Latency, g.Down, g.Up, g.Uptime, g.NCPU = s.gpuW, s.gpuLimit, s.nvmeT, s.latency, down, up, uptime, s.ncpu
@@ -348,18 +350,55 @@ func handleCtl(r ctlReq, e *engine) ctlResp {
 			}
 		}
 		return ctlResp{OK: true, Data: map[string]any{"dismissed": ids}}
+	case "version":
+		return ctlResp{OK: true, Data: versionInfo()}
+	case "update": // look for a release now; a newer one that fits the board is installed and run
+		to, err := updateSelf()
+		if err != nil {
+			return ctlResp{Error: err.Error()}
+		}
+		if to != "" {
+			go func() { time.Sleep(300 * time.Millisecond); restart() }() // after this reply is out
+		}
+		return ctlResp{OK: true, Data: map[string]any{"updated": to, "status": updateState().Status}}
 	}
 	return ctlResp{Error: "unknown cmd"}
 }
 
-func listenCtl(e *engine) {
+type versionDoc struct {
+	Version  string    `json:"version"`
+	API      int       `json:"api"`
+	Proto    int       `json:"proto"`
+	MinProto int       `json:"minProto"`
+	Board    boardDoc  `json:"board"`
+	Update   updateDoc `json:"update"`
+}
+
+func versionInfo() versionDoc {
+	return versionDoc{Version: version.Get(), API: version.API, Proto: version.Proto, MinProto: version.MinProto, Board: boardState(), Update: updateState()}
+}
+
+// listenCtl serves the control socket, private to this user. With shared, it also serves the notice commands to
+// every user of the machine on an abstract socket (Linux: no file, so no permissions; it goes away with the
+// process), so tft-notify works from any account.
+func listenCtl(e *engine, shared bool) {
 	path := ctlSock()
 	os.Remove(path)
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		return
+	if l, err := net.Listen("unix", path); err == nil {
+		os.Chmod(path, 0o600)
+		serveCtl(l, e, nil)
 	}
-	os.Chmod(path, 0o600)
+	if shared {
+		if l, err := net.Listen("unix", notify.SharedSocket); err == nil {
+			serveCtl(l, e, sharedCmds)
+		}
+	}
+}
+
+// sharedCmds is what other users may do: show, read and dismiss notices, and ask which versions are running.
+var sharedCmds = map[string]bool{"notify": true, "notices": true, "notice": true, "dismiss": true, "version": true}
+
+func serveCtl(l net.Listener, e *engine, only map[string]bool) {
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -375,6 +414,10 @@ func listenCtl(e *engine) {
 					var r ctlReq
 					if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
 						enc.Encode(ctlResp{Error: "bad json"})
+						continue
+					}
+					if only != nil && !only[r.Cmd] {
+						enc.Encode(ctlResp{Error: "not allowed from another user: " + strconv.Quote(r.Cmd)})
 						continue
 					}
 					enc.Encode(handleCtl(r, e))

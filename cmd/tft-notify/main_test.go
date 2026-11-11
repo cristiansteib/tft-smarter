@@ -7,11 +7,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/cristiansteib/tft-smarter/internal/notify"
 )
+
+// the tests never reach a real daemon through the shared socket
+func init() { notify.SharedSocket = "@tft-notify-test-" + strconv.Itoa(os.Getpid()) }
 
 func capture(t *testing.T, argv ...string) (int, string) {
 	t.Helper()
@@ -155,5 +159,27 @@ func TestAgentsInstall(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(d, "tft-notify")); !os.IsNotExist(err) {
 		t.Fatal("remove left the skill dir")
+	}
+}
+
+func TestStatus(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	compatible := false
+	fake(t, func(r notify.Request) any {
+		return map[string]any{"version": "0.16.0", "api": 1, "proto": 1, "minProto": 1,
+			"board": map[string]any{"connected": true, "proto": 0, "compatible": compatible, "problem": "flash it"}}
+	})
+	code, out := capture(t, "status", "--json")
+	var r struct {
+		Compatible bool
+		Monitor    string
+		Problem    string
+	}
+	if code != exitMismatch || json.Unmarshal([]byte(out), &r) != nil || r.Compatible || r.Monitor != "0.16.0" || r.Problem != "flash it" {
+		t.Fatalf("mismatch: %d %s", code, out)
+	}
+	compatible = true
+	if code, out := capture(t, "status"); code != 0 || !strings.Contains(out, "protocol 0  ok") {
+		t.Fatalf("fits: %d %s", code, out)
 	}
 }

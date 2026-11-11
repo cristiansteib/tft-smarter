@@ -1,0 +1,76 @@
+version: 2
+
+project_name: tft-smarter
+
+# compat.json says which firmware protocols this release's tft-monitor drives. A running tft-monitor reads it
+# before it updates itself, and stays where it is when the new one could not drive the board's firmware.
+before:
+  hooks:
+    - sh -c "mkdir -p build && go run ./cmd/tft-monitor compat > build/compat.json"
+
+builds:
+  # The CLI: on every machine (it only talks to a unix socket).
+  - id: tft-notify
+    main: ./cmd/tft-notify
+    binary: tft-notify
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/cristiansteib/tft-smarter/internal/version.Version={{.Version}}
+
+  # The daemon: Linux only (it reads /proc, /sys and nvidia-smi).
+  - id: tft-monitor
+    main: ./cmd/tft-monitor
+    binary: tft-monitor
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/cristiansteib/tft-smarter/internal/version.Version={{.Version}}
+
+# Raw binaries named <program>_<os>_<arch> (no version): `self-update` and mise download exactly these names; do
+# not change them.
+archives:
+  - id: raw
+    ids: [tft-notify, tft-monitor]
+    formats: [binary]
+    name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  extra_files:
+    - glob: build/compat.json
+
+# Every download is checked against checksums.txt; signing that list (keyless, tied to this repository's
+# workflow) is what makes the check mean something:
+#
+#   cosign verify-blob checksums.txt --signature checksums.txt.sig --certificate checksums.txt.pem \
+#     --certificate-identity-regexp '^https://github.com/cristiansteib/tft-smarter/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    artifacts: checksum
+    output: true
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+
+# semantic-release creates the release as a draft and writes its notes; GoReleaser fills that draft and publishes
+# it as its last step, so the release is "latest" only once every binary is attached.
+release:
+  use_existing_draft: true
+  mode: keep-existing
+  replace_existing_artifacts: true
+  extra_files:
+    - glob: build/compat.json
+
+changelog:
+  disable: true

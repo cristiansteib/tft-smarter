@@ -14,7 +14,7 @@ Parts and shopping links: [BOM.md](BOM.md).
 ## Protocol
 
 Binary frames, `0xAA 0x55 | type | len | payload | crc8` (CRC-8, poly 0x07) — see `cmd/tft-monitor/protocol.go`.
-The Mega drops any frame with a bad CRC and reports `ok=N bad=M` back every 5 s (`TFT_VERBOSE=1 tft-monitor` prints it).
+The Mega drops any frame with a bad CRC and reports `ok=N bad=M` back every 5 s (`TFT_VERBOSE=1 tft-monitor` prints it), together with `V <protocol> <firmware version>`.
 
 ## Screens
 
@@ -57,38 +57,11 @@ On the screen: **tap** dismisses the notice, **swipe** shows the next one, **hol
 
 For agents: every command takes `--json` (one JSON object on stdout, errors included), `tft-notify --help-json` describes every command, flag, level, exit code and the message schema, and exit code 3 means the monitor is not running. `tft-notify agents-install` writes a short skill to `~/.claude/skills/tft-notify/` (and `~/.agents/skills/` when `~/.agents` exists; `--dir` for others, `--print` to see it, `--remove` to undo) that tells coding agents the screen is there and when to use it.
 
-```
-mise run notify-install      # build into ~/.local/bin and install the agent skill
-mise use -g go:github.com/cristiansteib/tft-smarter/cmd/tft-notify@latest && tft-notify agents-install
-```
-
-## Touch
-
-The panel is a 4-wire resistive touchscreen (shield pins XP=8, XM=A2, YP=A3, YM=9, via Adafruit TouchScreen). On the first boot it asks for three taps (top-left, top-right, bottom-left) and stores the calibration in EEPROM. Hold a finger anywhere for 6 s to calibrate again, or use *Setup → Calibrate touch*.
-
-**Bottom menu**: a thin strip on every screen — Home, CPU, RAM, Net, Claude, System, Setup. Tap an entry to open it. **Tap the highlighted entry (the page you are on) to pin that page**; a small pin appears on the tab (and `pin` in the title). Tap it again to release. Any screen can be pinned, including Home and Setup. Navigating somewhere else lets go of the pin, and double-tapping a gauge on the dashboard opens its page already pinned.
-
-| On the dashboard, tap… | Opens |
-| --- | --- |
-| the CPU gauge | CPU |
-| the RAM gauge | RAM |
-| the GPU gauge | System |
-| the network rates | Network |
-| "claude" in the header, the left edge bar, or the usage line under the network | Claude |
-| "docker" in the header | Docker |
-| the load scope | Busiest |
-
-| On any other page | Does |
-| --- | --- |
-| tap the title | back home |
-| swipe left / right | next / previous page |
-| double-tap the body, or hold ~1 s | **pin** the page: it stays up (no return home, no alert takeover); do it again to let go |
-
-**Setup** is navigable by touch: swipe or tap *Next page* for its three sub-pages — *General* (return-home time, hog-page alternation, **Calibrate touch**, redraw), *Thresholds* (CPU hog %, load and RAM triggers, RAM hog %) and *Pages* (allow or hide individual pages). Tap a row to toggle it or run it; on `<  value  >` rows tap the left half of the value to decrease and the right half to increase. Tap the title to leave. Everything is saved immediately.
+Every user of the machine can send notices: the monitor also listens on the abstract socket `@tft-monitor`, which takes only `notify`, `notices`, `notice`, `dismiss` and `version` (run it with `-shared=false` to keep it to your own user).
 
 ## Desktop app and control socket
 
-`tft-monitor` listens on `$XDG_RUNTIME_DIR/tft-monitor.ctl` (newline-delimited JSON: `state`, `settings`, `set`, `pin`, `next`, `prev`, `goto`, `notify`, `notices`, `notice`, `dismiss`). Settings (hog thresholds, load/RAM triggers, page time, disabled pages) are saved in `~/.config/tft-monitor/settings.json`.
+`tft-monitor` listens on `$XDG_RUNTIME_DIR/tft-monitor.ctl` (newline-delimited JSON: `state`, `settings`, `set`, `pin`, `next`, `prev`, `goto`, `notify`, `notices`, `notice`, `dismiss`, `version`, `update`). Settings (hog thresholds, load/RAM triggers, page time, disabled pages) are saved in `~/.config/tft-monitor/settings.json`.
 
 `desktop-ui/` is a Tauri 2 + Angular app on top of it: live mirror of the TFT, notifications, page control and thresholds, service start/stop and logs.
 
@@ -97,23 +70,49 @@ mise run ui           # dev mode
 mise run ui-build     # release binary in desktop-ui/src-tauri/target/release
 ```
 
-## Install the host monitor with mise
+## Install and update
 
-Install the host monitor from the public repository:
+Releases are cut by [semantic-release](https://semantic-release.gitbook.io) from the commit messages on every push to `main` (`fix:` makes a patch release, `feat:` a minor one, `feat!:` or `BREAKING CHANGE:` a major one; other commits release nothing). GoReleaser then attaches raw binaries (`tft-notify_<os>_<arch>`, `tft-monitor_linux_<arch>`), `compat.json` and a cosign-signed `checksums.txt`.
 
-```
-mise use -g go:github.com/cristiansteib/tft-smarter/cmd/tft-monitor@latest
-tft-monitor -port /dev/ttyACM0      # TFT_VERBOSE=1 prints what it sends
-```
-
-## Run at login/boot (systemd user service)
+**tft-notify** (every user, every machine) comes from mise:
 
 ```
-tft-monitor install -port /dev/ttyACM0     # writes ~/.config/systemd/user/tft-monitor.service, enables + starts it
+mise use -g github:cristiansteib/tft-smarter     # see the dotfiles for the asset pattern
+tft-notify agents-install                       # the skill for coding agents
+```
+
+**tft-monitor** (the account the board is plugged into) runs as a systemd user service:
+
+```
+curl -fsSLo ~/.local/bin/tft-monitor https://github.com/cristiansteib/tft-smarter/releases/latest/download/tft-monitor_linux_amd64
+chmod +x ~/.local/bin/tft-monitor
+tft-monitor install -port /dev/serial/by-id/usb-Arduino...   # writes ~/.config/systemd/user/tft-monitor.service, enables + starts it
 tft-monitor uninstall
 ```
 
-Re-run `install` after upgrading to a new version (the unit points at the installed binary). It also runs `loginctl enable-linger` so it starts at boot.
+`install` also runs `loginctl enable-linger`, so it starts at boot.
+
+Updates work the way they do in multiversectl:
+
+- `tft-notify self-update` checks the download against `checksums.txt` and swaps the binary in place. If mise installed it, it runs `mise upgrade` instead. Then it refreshes the agent skill and asks the running monitor to update too.
+- The monitor updates itself. A released build checks a couple of minutes after it starts, then every 6 h, and replaces its own binary and restarts in place. It skips a release whose `compat.json` says it cannot drive the board's firmware.
+- In a terminal, tft-notify says when a release is out. The check runs in the background at most every 6 h and never with `--json`, so it costs agents nothing. `TFT_NO_UPDATE_CHECK=1` turns all of it off. Builds from source (`dev`) never update.
+
+## Versions and compatibility
+
+Three parts have to match: the firmware, `tft-monitor` and its clients (`tft-notify`, the desktop app). Their contract is in `internal/version`:
+
+- **`Proto`** is the serial protocol. The firmware's `PROTO` (in `src/main.cpp`) has to fall between the monitor's `MinProto` and `Proto`. Bump both when a frame is added or changed.
+- **`API`** is the control socket.
+
+```
+$ tft-notify status
+tft-notify   0.16.0
+tft-monitor  0.16.0  drives firmware protocol 1..1, auto-update on: up to date
+firmware     v0.16.0  protocol 1  ok
+```
+
+`status` exits 6 on a mismatch. The monitor also logs a mismatch and shows it on the screen once. Old firmware means flash it (`mise run flash`); a monitor older than the firmware updates itself.
 
 ## Develop
 

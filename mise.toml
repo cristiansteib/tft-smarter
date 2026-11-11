@@ -9,8 +9,12 @@ TFT_PORT = "/dev/ttyACM0"
 description = "Build the host monitor binary"
 run = "go build -ldflags='-s -w' -o bin/tft-monitor ./cmd/tft-monitor"
 
+[tasks.test]
+description = "Go tests and the firmware build"
+run = ["go vet ./...", "go test ./...", "pio run"]
+
 [tasks.notify-install]
-description = "Install tft-notify into ~/.local/bin and its skill for coding agents"
+description = "Build tft-notify from source into ~/.local/bin (releases come from mise: see README) and install its skill"
 run = ["go build -ldflags='-s -w' -o ~/.local/bin/tft-notify ./cmd/tft-notify", "~/.local/bin/tft-notify agents-install"]
 
 [tasks.monitor]

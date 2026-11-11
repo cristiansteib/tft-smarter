@@ -43,6 +43,9 @@ func cmdAgentsInstall(a *args) error {
 	for _, d := range dirs {
 		dir := filepath.Join(d, skillName)
 		f := filepath.Join(dir, "SKILL.md")
+		if _, err := os.Stat(f); err != nil && a.flag("refresh") {
+			continue
+		}
 		if a.flag("remove") {
 			if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err

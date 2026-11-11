@@ -15,3 +15,7 @@ bin/
 *.p12
 *.bundle
 __pycache__/
+build/
+dist/
+/tft-monitor
+/tft-notify

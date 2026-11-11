@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cristiansteib/tft-smarter/internal/notify"
+	"github.com/cristiansteib/tft-smarter/internal/version"
 )
 
 // Exit codes.
@@ -26,12 +26,14 @@ const (
 	exitDown     = 3 // tft-monitor is not running
 	exitExpired  = 4 // --wait: the notice expired before anyone tapped it
 	exitTimedOut = 5 // --wait: gave up waiting (the notice is still up)
+	exitMismatch = 6 // status: the board's firmware and tft-monitor do not fit together
 )
 
 var exitCodes = map[string]string{
 	"0": "ok (with --wait: the user dismissed it)", "1": "error", "2": "bad usage",
 	"3": "tft-monitor is not running (no screen): carry on without it",
 	"4": "--wait: the notice expired before the user tapped it", "5": "--wait: --timeout reached, the notice is still up",
+	"6": "status: firmware and tft-monitor do not fit together",
 }
 
 // ---- flags, declared once: they drive parsing, --help and --help-json ----
@@ -102,7 +104,13 @@ func init() {
 				{Name: "dir", Type: "string", Repeat: true, Arg: "DIR", Help: "skills directory to install into instead of the defaults"},
 				{Name: "print", Type: "bool", Help: "print the skill instead of installing it"},
 				{Name: "remove", Type: "bool", Help: "uninstall it"},
+				{Name: "refresh", Type: "bool", Help: "only rewrite it where it is already installed (after an update)"},
 				jsonOpt}, run: cmdAgentsInstall},
+		{Name: "status", Usage: "tft-notify status [--check]", Summary: "versions of tft-notify, tft-monitor and the board's firmware, and whether they fit (exit 6 if not)",
+			Flags: []opt{{Name: "check", Type: "bool", Help: "also look for a newer release now"}, jsonOpt}, run: cmdStatus},
+		{Name: "self-update", Usage: "tft-notify self-update [--check]", Summary: "update tft-notify (and tft-monitor) to the latest release",
+			Flags: []opt{{Name: "check", Type: "bool", Help: "only say whether one is out"}, jsonOpt}, run: cmdSelfUpdate},
+		{Name: "version", Usage: "tft-notify version", Summary: "this build's version", Flags: []opt{jsonOpt}, run: cmdVersion},
 	}
 }
 
@@ -504,13 +512,6 @@ func piped(f *os.File) bool {
 
 // ---- help ----
 
-func version() string {
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
-	}
-	return "dev"
-}
-
 func helpText(c *command) string {
 	var b strings.Builder
 	if c == nil {
@@ -549,8 +550,8 @@ Examples:
   make 2>&1 | tail -3 | tft-notify -l error                      # stdin becomes the text
   tft-notify --json -m '{"level":"warn","title":"Disk 91%","fields":{"host":"nas"}}'
 
-Also: --help-json (everything above as JSON), --version. Exit codes: 0 ok, 1 error, 2 usage,
-3 tft-monitor not running, 4 expired (--wait), 5 timeout (--wait).
+Also: --help-json (everything above as JSON), status, self-update. Exit codes: 0 ok, 1 error, 2 usage,
+3 tft-monitor not running, 4 expired (--wait), 5 timeout (--wait), 6 firmware/monitor mismatch (status).
 `)
 	}
 	return b.String()
@@ -617,7 +618,7 @@ func run(argv []string) int {
 			fmt.Fprintln(stdout, helpJSON())
 			return exitOK
 		case "--version", "-version":
-			fmt.Fprintln(stdout, version())
+			fmt.Fprintln(stdout, version.Get())
 			return exitOK
 		}
 	}
@@ -640,7 +641,11 @@ func run(argv []string) int {
 	}
 	a, err := parse(argv)
 	if err == nil {
+		done := startUpdateCheck(a)
 		err = a.cmd.run(a)
+		if err == nil {
+			done()
+		}
 	}
 	if err == nil {
 		return exitOK

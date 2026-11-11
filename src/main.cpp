@@ -19,6 +19,14 @@ static void pump();   // drain the serial port; safe to call between draw steps 
 // precomputed port values (UNO shield pinout: D0 PH5, D1 PH6, D2 PE4, D3 PE5, D4 PG5, D5 PE3, D6 PH3, D7 PH4;
 // WR PF1, RS PF2, CS PF3). Other controllers / boards fall back to the library.
 #if defined(__AVR_ATmega2560__)
+// The serial protocol this firmware speaks, reported to the PC as "V <proto> <version>" at boot and every 5 s so
+// tft-monitor can tell whether it can drive it (internal/version: Proto, MinProto). Bump it with any frame change.
+#define PROTO 1
+#ifndef FW_VERSION      // set by tools/fw_version.py from `git describe`
+#define FW_VERSION "dev"
+#endif
+static void hello() { Serial.print(F("V ")); Serial.print(PROTO); Serial.print(' '); Serial.println(F(FW_VERSION)); }
+
 #define FAST_LCD 1
 #define AINL inline __attribute__((always_inline))
 // data byte -> port bits, as tables (the shifts cost ~40 cycles per byte otherwise)
@@ -1538,7 +1546,7 @@ static void bootScreen(uint16_t id) {
   char b[24];
   snprintf_P(b, sizeof b, PSTR("ILI%X %dx%d"), id, W, H); bootLine(F("DISPLAY"), b);
   bootLine(F("SERIAL"), F("115200 8N1")); 
-  bootLine(F("PROTOCOL"), F("CRC-8 frames"));
+  snprintf_P(b, sizeof b, PSTR("v%d CRC-8 frames"), PROTO); bootLine(F("PROTOCOL"), b);
   bootLine(F("GAUGES"), F("CPU GPU RAM"));
   bootLine(F("RINGS"), F("TEMP SWAP"));
   bootLine(F("SCOPE"), F("load history"));
@@ -1703,6 +1711,7 @@ static void touchPoll() {
 
 void setup() {
   Serial.begin(115200);
+  hello();
   uint16_t id = tft.readID();
   Serial.print(F("TFT ID: 0x")); Serial.println(id, HEX);
   if (id == 0xD3D3) id = 0x9486;
@@ -1755,6 +1764,7 @@ void loop() {
   if (millis() - lastStat > 5000) {
     lastStat = millis();
     Serial.print(F("ok=")); Serial.print(framesOk); Serial.print(F(" bad=")); Serial.println(framesBad);
+    hello();
   }
   if (online && millis() - lastRx > 5000) {
     online = false;

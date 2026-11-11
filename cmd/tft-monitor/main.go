@@ -23,6 +23,10 @@ import (
 	"time"
 
 	"go.bug.st/serial"
+
+	"github.com/cristiansteib/tft-smarter/internal/notify"
+	"github.com/cristiansteib/tft-smarter/internal/selfupdate"
+	"github.com/cristiansteib/tft-smarter/internal/version"
 )
 
 func readFile(p string) string { b, _ := os.ReadFile(p); return string(b) }
@@ -345,12 +349,15 @@ func run(port serial.Port, cpuT string) error {
 			if ev, ok := parseTouch(line); ok {
 				queueTouch(ev)
 			}
+			boardLine(line)
 			if verbose {
 				fmt.Print("board: ", line)
 			}
 		}
 	}()
 
+	boardUp(time.Now())
+	defer boardDown()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for n := 1; ; n++ {
@@ -430,11 +437,16 @@ func run(port serial.Port, cpuT string) error {
 			}
 		}
 		latest.Store(pan.doc(snap, eng, down, up, uint32(uptime), now))
+		if n%4 == 0 {
+			boardCheck()
+		}
 	}
 }
 
 func main() {
 	portName := flag.String("port", "/dev/ttyACM0", "serial port of the Arduino")
+	autoUpd := flag.Bool("auto-update", true, "keep a released build on the latest release (also off with "+selfupdate.OptOutEnv+"=1)")
+	shared := flag.Bool("shared", true, "also take notices from other users of this machine (abstract socket "+notify.SharedSocket+")")
 	cmd := ""
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		cmd = os.Args[1]
@@ -454,14 +466,32 @@ func main() {
 		return
 	case "notify":
 		log.Fatal("notifications moved to tft-notify: tft-notify -l warn \"build finished\" (tft-notify --help)")
+	case "version":
+		fmt.Println("tft-monitor", version.Get(), "- firmware protocols", version.MinProto, "to", version.Proto, "- api", version.API)
+		return
+	case "compat": // what the release pipeline publishes as compat.json
+		fmt.Printf("{\"proto\":%d,\"minProto\":%d,\"api\":%d}\n", version.Proto, version.MinProto, version.API)
+		return
+	case "self-update":
+		to, err := updateSelf()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if to == "" {
+			fmt.Println(updateState().Status)
+			return
+		}
+		fmt.Println("updated to", to, "- restart the service to run it: systemctl --user restart tft-monitor")
+		return
 	case "":
 	default:
-		log.Fatalf("unknown command %q (use: install, uninstall)", cmd)
+		log.Fatalf("unknown command %q (use: install, uninstall, version, self-update)", cmd)
 	}
 	cpuT := cpuTempFile()
 	collectors, eng, pan, gpus = startCollectors(), newEngine(), newPanel(), startGPU()
 	loadCfg()
-	listenCtl(eng)
+	listenCtl(eng, *shared)
+	autoUpdate(*autoUpd)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
