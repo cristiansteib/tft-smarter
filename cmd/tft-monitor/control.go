@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/cristiansteib/tft-smarter/internal/notify"
 )
 
 // settings are the knobs the desktop UI can change at runtime; they persist in the user config dir.
@@ -112,14 +115,15 @@ type stateDoc struct {
 		Load     [3]float64 `json:"load"`
 		NCPU     int        `json:"ncpu"`
 	} `json:"gauges"`
-	Disks  []diskDoc       `json:"disks"`
-	PSI    [3]float64      `json:"psi"`
-	TopCPU []procDoc       `json:"topCpu"`
-	TopMem []procDoc       `json:"topMem"`
-	Panel  panelDoc        `json:"panel"`
-	Alerts []alertDoc      `json:"alerts"`
-	Docker map[string]int  `json:"docker"`
-	Hog    map[string]bool `json:"hog"`
+	Disks   []diskDoc       `json:"disks"`
+	PSI     [3]float64      `json:"psi"`
+	TopCPU  []procDoc       `json:"topCpu"`
+	TopMem  []procDoc       `json:"topMem"`
+	Panel   panelDoc        `json:"panel"`
+	Alerts  []alertDoc      `json:"alerts"`
+	Docker  map[string]int  `json:"docker"`
+	Hog     map[string]bool `json:"hog"`
+	Notices []notify.Notice `json:"notices"` // active, in screen order
 }
 
 type diskDoc struct {
@@ -146,13 +150,14 @@ type pageDoc struct {
 }
 
 type panelDoc struct {
-	Page  string    `json:"page"`
-	Sub   int       `json:"sub"`
-	Subs  int       `json:"subs"`
-	Pin   string    `json:"pin"`
-	Full  bool      `json:"full"`
-	Pages []pageDoc `json:"pages"`
-	Cells []cellDoc `json:"cells"`
+	Page   string    `json:"page"`
+	Sub    int       `json:"sub"`
+	Subs   int       `json:"subs"`
+	Pin    string    `json:"pin"`
+	Full   bool      `json:"full"`
+	Pages  []pageDoc `json:"pages"`
+	Cells  []cellDoc `json:"cells"`
+	Accent [2]string `json:"accent"` // notice page: palette 9 and 10, #RRGGBB
 }
 
 type alertDoc struct {
@@ -198,11 +203,20 @@ func (p *panel) doc(s *snapshot, e *engine, down, up int, uptime uint32, now tim
 		d.Panel.Cells = append(d.Panel.Cells, cellDoc{int(slot), int(cl.style), int(cl.pct), cl.text})
 	}
 	sort.Slice(d.Panel.Cells, func(i, j int) bool { return d.Panel.Cells[i].Slot < d.Panel.Cells[j].Slot })
+	if p.name == "note" {
+		d.Panel.Accent = [2]string{hex565(p.accent[0]), hex565(p.accent[1])}
+	}
+	d.Notices, _ = notes.list(now)
 	list, _, _ := e.view(now)
 	for _, a := range list {
 		d.Alerts = append(d.Alerts, alertDoc{a.key, a.title, a.detail, a.sev})
 	}
 	return d
+}
+
+func hex565(c uint16) string {
+	r, g, b := c>>11&31, c>>5&63, c&31
+	return fmt.Sprintf("#%02X%02X%02X", r<<3|r>>2, g<<2|g>>4, b<<3|b>>2)
 }
 
 func procDocs(v []nameVal) []procDoc {
@@ -226,21 +240,19 @@ func disconnected() {
 
 // ---- control socket: newline-delimited JSON requests, one JSON reply each ----
 
-func ctlSock() string {
-	d := os.Getenv("XDG_RUNTIME_DIR")
-	if d == "" {
-		d = "/run/user/" + strconv.Itoa(os.Getuid())
-	}
-	return d + "/tft-monitor.ctl"
-}
+func ctlSock() string { return notify.Socket() }
 
 type ctlReq struct {
-	Cmd      string    `json:"cmd"`
-	Sev      string    `json:"sev"`
-	TTL      int       `json:"ttl"`
-	Text     string    `json:"text"`
-	Page     string    `json:"page"`
-	Settings *settings `json:"settings"`
+	Cmd      string          `json:"cmd"`
+	Sev      string          `json:"sev"` // notify, short form: sev + ttl + text
+	TTL      int             `json:"ttl"`
+	Text     string          `json:"text"`
+	Message  *notify.Message `json:"message"` // notify, full form
+	ID       string          `json:"id"`      // notice, dismiss
+	All      bool            `json:"all"`     // dismiss
+	By       string          `json:"by"`      // dismiss: who did it (cli, ui)
+	Page     string          `json:"page"`
+	Settings *settings       `json:"settings"`
 }
 
 type ctlResp struct {
@@ -296,12 +308,46 @@ func handleCtl(r ctlReq, e *engine) ctlResp {
 		queueTouch(touchEv{kind: 'g', page: r.Page})
 		return ctlResp{OK: true}
 	case "notify":
-		sev := map[string]int{"info": sevInfo, "warn": sevWarn, "crit": sevCrit}[r.Sev]
-		if r.Text == "" {
-			return ctlResp{Error: "empty text"}
+		m := r.Message
+		if m == nil { // short form: {"sev":"warn","ttl":60,"text":"build finished"}
+			m = &notify.Message{Level: r.Sev, Title: r.Text}
+			if r.TTL > 0 {
+				m.TTL = &r.TTL
+			}
 		}
-		e.notify(max(sev, sevInfo), time.Duration(max(r.TTL, 5))*time.Second, short(r.Text, 60))
-		return ctlResp{OK: true}
+		n, err := notes.add(*m, time.Now())
+		if err != nil {
+			return ctlResp{Error: err.Error()}
+		}
+		return ctlResp{OK: true, Data: n}
+	case "notices":
+		a, rc := notes.list(time.Now())
+		return ctlResp{OK: true, Data: map[string]any{"active": a, "recent": rc}}
+	case "notice":
+		n, ok := notes.get(r.ID, time.Now())
+		if !ok {
+			return ctlResp{Error: "unknown id " + strconv.Quote(r.ID)}
+		}
+		return ctlResp{OK: true, Data: n}
+	case "dismiss":
+		if r.ID == "" && !r.All {
+			return ctlResp{Error: "give an id or all"}
+		}
+		by := r.By
+		if by == "" {
+			by = "cli"
+		}
+		ids := notes.dismiss(r.ID, r.All, by, time.Now())
+		if ids == nil {
+			if r.All {
+				ids = []string{}
+			} else if _, ok := notes.get(r.ID, time.Now()); !ok {
+				return ctlResp{Error: "unknown id " + strconv.Quote(r.ID)}
+			} else {
+				ids = []string{} // already closed
+			}
+		}
+		return ctlResp{OK: true, Data: map[string]any{"dismissed": ids}}
 	}
 	return ctlResp{Error: "unknown cmd"}
 }

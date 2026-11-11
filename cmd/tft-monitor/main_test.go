@@ -44,6 +44,7 @@ func resetGlobals(t testing.TB) {
 	t.Helper()
 	setCfg(defaultSettings())
 	debounce = map[string]*latch{}
+	notes = &inbox{}
 	skipAt.Store(false)
 	prevAt.Store(false)
 	for len(touchCh) > 0 {

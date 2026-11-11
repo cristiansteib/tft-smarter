@@ -89,7 +89,7 @@ func (p *panel) goTo(name string, now time.Time) {
 		c.Pin = ""
 		setCfg(c)
 	}
-	p.manual, p.manualEnd = name, now.Add(returnHold())
+	p.manual, p.manualEnd, p.manualAt = name, now.Add(returnHold()), now
 }
 
 // current is the page on screen, or the one a tap just opened (it counts even before the screen has switched).
@@ -139,6 +139,10 @@ func (p *panel) handleTouch(ev touchEv, s *snapshot, now time.Time) {
 		} else {
 			p.goTo(targets[ev.x], now)
 		}
+		return
+	}
+	if p.name == "note" {
+		p.touchNote(ev, now)
 		return
 	}
 	if p.name == "settings" {
@@ -210,4 +214,23 @@ func (p *panel) isDoubleTap(ev touchEv) bool {
 	}
 	p.lastTap = touchEv{} // a third tap starts over
 	return true
+}
+
+// touchNote: on a notice, a tap dismisses it, a swipe shows the next / previous one and a hold dismisses them all.
+// Taps in the first moment after a notice came up are ignored: they were meant for whatever was on screen before.
+func (p *panel) touchNote(ev touchEv, now time.Time) {
+	switch ev.kind {
+	case 't':
+		if now.Sub(p.noteAt) >= 800*time.Millisecond {
+			notes.dismiss(p.noteID, false, "touch", now)
+		}
+	case 'l':
+		notes.dismiss("", true, "touch", now)
+	case 's':
+		if ev.dir == 'L' {
+			p.noteIdx++
+		} else {
+			p.noteIdx--
+		}
+	}
 }

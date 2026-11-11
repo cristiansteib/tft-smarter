@@ -8,6 +8,7 @@ Parts and shopping links: [BOM.md](BOM.md).
 
 - `src/main.cpp` – firmware (PlatformIO, MCUFRIEND_kbv, Adafruit TouchScreen): gauges, load scope, full-screen pages, touch gestures, and a split edge bar for Claude Code weekly (W) and 5-hour session (S) usage. Text is composed with its background in one pass (no blank-then-draw flicker) and repainted only where it changed.
 - `cmd/tft-monitor` – Go program that runs on the PC and streams stats over USB serial (stats every 0.25 s, Claude/Docker data every ~2 s), lays out the screens and handles touch.
+- `cmd/tft-notify` – CLI to put notices on the screen (for people, scripts and coding agents); `internal/notify` is the message model both share.
 - `desktop-ui` – Tauri + Angular desktop app.
 
 ## Protocol
@@ -24,10 +25,41 @@ The PC decides what the display shows; the Mega only draws what it is sent. Page
 - **Hogging CPU / RAM** come up by themselves when the machine is busy (load per core or RAM over the trigger and a process over its threshold), list only the real hogs, and go away once things calm down. The CPU one adds the load scope and RAM/swap bars. A page opened by hand stays at least 10 s.
 - Scopes are real time (one sample per 250 ms frame); every text readout is steadier: network rates are a 3 s average that only moves when the traffic moves by more than ~8 %, and a bar that shifts by one point is not retransmitted.
 - A page you open stays while you keep touching and returns home after *Return home after* (60 s) without a touch; pin a page to keep it up as long as you like (handy for watching the network).
-- Alerts (disk full, temperatures, memory/swap, load, unhealthy containers, no internet…) take over the dashboard band with hysteresis. Push your own message:
+- Alerts (disk full, temperatures, memory/swap, load, unhealthy containers, no internet…) take over the dashboard band with hysteresis.
+- **Notices** you (or an agent) send with `tft-notify` take over the whole screen; see below.
+
+## Notifications: `tft-notify`
+
+`cmd/tft-notify` is a small CLI that puts a notice on the screen through the monitor's control socket.
 
 ```
-tft-monitor notify -sev warn -ttl 60 "build finished"     # sev: info|warn|crit
+tft-notify "Coffee is ready"                                       # info, 20 s
+tft-notify -l success -s ci "Deploy done" "api v2.3.1 is live"
+tft-notify -l action -a "Approve in the terminal" "Push to main?"   # blinks, stays until tapped
+tft-notify --id build -p 40 "Building firmware"                    # same id: updated in place
+tft-notify -l action --wait --timeout 10m "Plug in the board"      # blocks until you tap it
+make 2>&1 | tail -3 | tft-notify -l error                          # stdin becomes the text
+tft-notify --json -m '{"level":"warn","title":"Disk 91%","fields":{"host":"nas"}}'
+tft-notify list | get ID | wait ID | dismiss ID|--all | levels
+```
+
+| Level | Use | Colour | Stays |
+| --- | --- | --- | --- |
+| `info` | FYI | blue | 20 s |
+| `success` | finished fine | teal | 30 s |
+| `warn` | worth a look soon | amber | 2 min |
+| `error` | something failed | coral | 10 min |
+| `action` | you must act now; the header blinks | pink | until tapped |
+
+Two layouts: **simple** (a big title and a short line) and **detail** (title, body, the action to take, a progress bar and up to six `label value` rows, with the source in the header); `--view auto` (the default) picks detail when there is an action, progress, fields or a long body. `-c` overrides the accent with `#RRGGBB` or a name, `-t` the time on screen (`0` = until tapped). The header shows the level, the source, the time and `2/3` when several are waiting, most urgent first.
+
+On the screen: **tap** dismisses the notice, **swipe** shows the next one, **hold** dismisses them all. The menu still works: a page you open wins until a newer notice arrives, and once the notices are gone the screen returns to what was up before.
+
+For agents: every command takes `--json` (one JSON object on stdout, errors included), `tft-notify --help-json` describes every command, flag, level, exit code and the message schema, and exit code 3 means the monitor is not running. `tft-notify agents-install` writes a short skill to `~/.claude/skills/tft-notify/` (and `~/.agents/skills/` when `~/.agents` exists; `--dir` for others, `--print` to see it, `--remove` to undo) that tells coding agents the screen is there and when to use it.
+
+```
+mise run notify-install      # build into ~/.local/bin and install the agent skill
+mise use -g go:github.com/cristiansteib/tft-smarter/cmd/tft-notify@latest && tft-notify agents-install
 ```
 
 ## Touch
@@ -56,7 +88,7 @@ The panel is a 4-wire resistive touchscreen (shield pins XP=8, XM=A2, YP=A3, YM=
 
 ## Desktop app and control socket
 
-`tft-monitor` listens on `$XDG_RUNTIME_DIR/tft-monitor.ctl` (newline-delimited JSON: `state`, `settings`, `set`, `pin`, `next`, `prev`, `notify`). Settings (hog thresholds, load/RAM triggers, page time, disabled pages) are saved in `~/.config/tft-monitor/settings.json`.
+`tft-monitor` listens on `$XDG_RUNTIME_DIR/tft-monitor.ctl` (newline-delimited JSON: `state`, `settings`, `set`, `pin`, `next`, `prev`, `goto`, `notify`, `notices`, `notice`, `dismiss`). Settings (hog thresholds, load/RAM triggers, page time, disabled pages) are saved in `~/.config/tft-monitor/settings.json`.
 
 `desktop-ui/` is a Tauri 2 + Angular app on top of it: live mirror of the TFT, notifications, page control and thresholds, service start/stop and logs.
 

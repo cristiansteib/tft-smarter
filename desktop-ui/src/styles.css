@@ -44,4 +44,5 @@ li > span:first-child { flex: 1; } li b { font-variant-numeric: tabular-nums; }
 .tag { font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); } .tag.on { color: var(--accent); border-color: var(--accent); }
 .slider { margin-bottom: 16px; } .slider span { display: flex; justify-content: space-between; } .slider b { color: var(--fg); }
 .sev { font-size: 11px; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; background: var(--line); } .sev.s2 { background: var(--warn); color: #000; } .sev.s3 { background: var(--bad); color: #fff; }
+.sev.lv-info { background: #4aa8ff; color: #000; } .sev.lv-success { background: #27d6b4; color: #000; } .sev.lv-warn { background: #ffb020; color: #000; } .sev.lv-error { background: #ff5560; color: #fff; } .sev.lv-action { background: #ff4fa3; color: #000; }
 pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; max-height: 360px; overflow: auto; font: 12px/1.5 ui-monospace, monospace; margin: 0; white-space: pre-wrap; }

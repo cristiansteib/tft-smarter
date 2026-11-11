@@ -361,7 +361,7 @@ static void bxEndDiff(uint8_t row) {
   }
   LSig *os = lsig[row];
   uint8_t on = lsN[row];
-  uint16_t box = (bxX0 << 7) ^ (bxX1 - bxX0) ^ ((bxY1 - bxY0) << 10);
+  uint16_t box = (bxX0 << 7) ^ (bxX1 - bxX0) ^ ((bxY1 - bxY0) << 10) ^ bxPal[0];   // a new background repaints it all
   if (on == 255 || box != lsBox[row]) bxPaint(bxX0, bxX1);   // unknown or different box: all of it
   else {
     uint8_t d[30];
@@ -599,7 +599,9 @@ static PGM_P nthP(PGM_P s, uint8_t i) { while (i--) s += strlen_P(s) + 1; return
 // ---- info panel (bottom band): the PC lays out cells and pages, we only draw ----
 #define PX 28
 #define PY 260        // band: two 20 px rows, y 260..299; the menu strip owns y 300..319
-static const uint16_t PAL[9] = {WHITE, GREY, GREEN, YELLOW, ORANGE, RED, CYAN, TEMP_OK, MAGENTA};
+#define MENU_Y 300
+// 9 and 10 are the accent of the notice page and its dimmed twin (set by the PC with frame 12)
+static uint16_t PAL[11] = {WHITE, GREY, GREEN, YELLOW, ORANGE, RED, CYAN, TEMP_OK, MAGENTA, CYAN, DARK};
 static uint16_t cellHash[6];                 // skip redraws of identical cells
 static uint8_t bIdx = 255, bCnt = 255, bSev = 255, bBorder = 255;
 static uint8_t bandDirty;                    // slots still showing the previous band page (bit per slot)
@@ -637,7 +639,7 @@ static void drawCell(const uint8_t *p, uint8_t len) {   // slot | style | pct | 
   if (val) *val++ = 0;
   bandDirty &= ~(wide ? 3 << slot : 1 << slot);
   int x0 = PX + (slot & 1) * 224, y0 = PY + (slot >> 1) * 20, w = wide ? 446 : 222;
-  uint16_t col = PAL[min(style & 15, 8)];
+  uint16_t col = PAL[min(style & 15, 10)];
   int base = big ? y0 + 17 : y0 + 15;
   // one pass over the cell box, so the old cell is overwritten, never blanked. For the right column the box also
   // takes the 2 px gap: a wide cell of the previous page may have drawn there, and the band is not cleared as a whole.
@@ -659,7 +661,7 @@ static void drawCell(const uint8_t *p, uint8_t len) {   // slot | style | pct | 
 
 // ---- full-screen pages: the PC replaces the whole dashboard with a list of rows ----
 // Row 0 is the title (big), rows 1..9 are data lines: [row | style | pct | "label\tvalue"].
-static bool pageMode = false, pageScope = false, pageLogo = false, pageNet = false;
+static bool pageMode = false, pageScope = false, pageLogo = false, pageNet = false, pageNote = false;
 static bool netVisible() { return pageMode && pageNet && online; }
 static uint16_t lineHash[10];
 #define LROW 31
@@ -680,15 +682,18 @@ static void drawLine(const uint8_t *p, uint8_t len) {
   else sub = false;
   char *val = strchr(txt, '\t');
   if (val) *val++ = 0;
-  uint16_t col = PAL[min(style & 15, 8)];
+  uint16_t col = PAL[min(style & 15, 10)];
   int y = 4 + row * LROW;
   char sw[6];
   // one pass over the whole row (the swap row is 2 px taller): label, title rule, bar, value
-  bxBegin(0, y, W, LROW + (sub ? 2 : 0), BLACK);
+  // a notice: the header row is filled with the accent (dark text), the other rows leave room for the accent strip
+  bool head = pageNote && row == 0;
+  int x0 = pageNote && !head ? 8 : 0, lx = pageNote && !head ? 22 : 14;
+  if (head) bxBegin(0, 0, W, LROW + 4, col); else bxBegin(x0, y, W - x0, LROW + (sub ? 2 : 0), BLACK);
   // label: title in bold 18, rows in regular 12 (cloud when the row has a bar, mist otherwise)
-  int base = y + (big ? 25 : 21);
-  bxText(big ? &FreeSansBold18pt7b : &FreeSans12pt7b, big || bright ? col : bar ? WHITE : GREY, 14, base, txt);
-  if (big) bxRect(14, y + LROW - 4, W - 28, 1, DARK);
+  int base = y + (head ? 24 : big ? 25 : 21);
+  bxText(big ? &FreeSansBold18pt7b : &FreeSans12pt7b, head ? BLACK : big || bright ? col : bar ? WHITE : GREY, lx, base, txt);
+  if (big && row == 0 && !pageNote) bxRect(14, y + LROW - 4, W - 28, 1, DARK);
   if (val) {
     if (bar) {
       int bx = 172, bw = 210, fill = (long)(bw - 4) * min((int)pct, 100) / 100;
@@ -704,7 +709,7 @@ static void drawLine(const uint8_t *p, uint8_t len) {
         bxText(nullptr, sc, bx + bw + 10, y + 25, sw);
       }
     } else {
-      bxText(&FreeSansBold12pt7b, col, W - 14, base, val, 2);
+      bxText(&FreeSansBold12pt7b, head ? BLACK : col, W - 14, base, val, 2);
     }
   }
   bxEndDiff(row);
@@ -740,12 +745,24 @@ static void bandFlush() {   // blank the slots the new band page did not paint (
   bandDirty = 0;
 }
 
+static void noteStrip() { tft.fillRect(0, LROW + 4, 6, MENU_Y - LROW - 4, PAL[9]); }
+
+// a notice colour changed: on the notice page every row is drawn again in it (the PC resends them)
+static void setAccent(uint8_t idx, uint16_t c) {
+  if (idx < 9 || idx > 10 || PAL[idx] == c) return;
+  PAL[idx] = c;
+  if (!pageMode || !pageNote) return;
+  memset(lineHash, 0, sizeof lineHash); lsReset();
+  if (idx == 9) noteStrip();
+}
+
 static void drawPanelItem() {
   if (!qn) return;
   Item it = q[qh];
   qh = (qh + 1) % 6; qn--;
   if (it.type == 8) setScreen(it.d[0]);    // screen switch: 0 dashboard, 1 full page, 2 full page + clear
   else if (it.type == 9) { if (pageMode) drawLine(it.d, it.len); }   // full-screen row
+  else if (it.type == 12) setAccent(it.d[0], it.d[1] | it.d[2] << 8);
   else if (pageMode) { /* band/cell frames are stale while a full page is up */ }
   else if (it.type == 5) drawCell(it.d, it.len);
   else drawBand(it.d, it.len);
@@ -1176,6 +1193,7 @@ static void setScreen(uint8_t mode) {   // low bits: 0 dashboard, 1 full page, 2
     pageScope = mode & 0x10;
     pageLogo = mode & 0x20;
     pageNet = mode & 0x08;
+    pageNote = mode & 0x04;
     tft.fillScreen(BLACK);
     memset(lineHash, 0, sizeof lineHash); lsReset();
     if (pageScope) {
@@ -1186,6 +1204,7 @@ static void setScreen(uint8_t mode) {   // low bits: 0 dashboard, 1 full page, 2
       graphRepaint();
     }
     if (pageNet) { graphGeom(true); netCaption(); netRepaint(); }
+    if (pageNote) noteStrip();
     menuBar();
   } else {
     drawStatic(); drawHeader();        // repaints everything; the stats loop refills the gauges
@@ -1429,7 +1448,7 @@ static void ssTick() {
 }
 
 // ---- binary protocol: 0xAA 0x55 | type | len | payload | crc8(type,len,payload) ----
-enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7, F_SCREEN = 8, F_LINE = 9, F_PAGE = 10, F_CMD = 11 };
+enum : uint8_t { F_STATS = 1, F_CLAUDE = 2, F_BAND = 4, F_CELL = 5, F_SUM = 6, F_BYE = 7, F_SCREEN = 8, F_LINE = 9, F_PAGE = 10, F_CMD = 11, F_COLOR = 12 };
 static bool menuDirty = false;    // the highlighted menu entry (or its pin) changed
 static bool menuPinned = false;   // the PC says the current page is pinned
 static uint8_t menuSlot = 255;    // which menu entry the PC says is showing (255 = none)
@@ -1473,7 +1492,7 @@ static void handleFrame(uint8_t type, const uint8_t *p, uint8_t len) {
     if (menuSlot != p[0] || menuPinned != pin) { menuSlot = p[0]; menuPinned = pin; menuDirty = true; }
   } else if (type == F_CMD && len == 1) {
     if (p[0] == 1) doCal = true;
-  } else if (type == F_BAND || type == F_CELL || type == F_LINE || (type == F_SCREEN && len == 1)) {
+  } else if (type == F_BAND || type == F_CELL || type == F_LINE || (type == F_SCREEN && len == 1) || (type == F_COLOR && len == 3)) {
     enqueue(type, p, len);
   }
 }
@@ -1612,7 +1631,6 @@ static void touchInit() {
 }
 
 // ---- bottom menu: a thin strip on every screen (y 300..319); a tap sends the choice to the PC ----
-#define MENU_Y 300
 #define MENU_N 7
 static const char MENU[] PROGMEM = "Home\0CPU\0RAM\0Net\0Claude\0System\0Setup";   // MENU_N entries
 static void menuBar() {
@@ -1636,7 +1654,7 @@ static void menuBar() {
 
 // repaint whatever screen is up (after a calibration covered it); the PC resends the contents
 static void repaintCurrent() {
-  if (pageMode) setScreen(0x42 | (pageScope ? 0x10 : 0) | (pageLogo ? 0x20 : 0) | (pageNet ? 0x08 : 0)); else setScreen(0x40);
+  if (pageMode) setScreen(0x42 | (pageScope ? 0x10 : 0) | (pageLogo ? 0x20 : 0) | (pageNet ? 0x08 : 0) | (pageNote ? 0x04 : 0)); else setScreen(0x40);
   qn = 0;
 }
 

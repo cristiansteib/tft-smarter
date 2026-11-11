@@ -435,8 +435,6 @@ func run(port serial.Port, cpuT string) error {
 
 func main() {
 	portName := flag.String("port", "/dev/ttyACM0", "serial port of the Arduino")
-	sev := flag.String("sev", "info", "notify: severity info|warn|crit")
-	ttl := flag.Int("ttl", 30, "notify: seconds to keep the notification")
 	cmd := ""
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		cmd = os.Args[1]
@@ -455,18 +453,14 @@ func main() {
 		}
 		return
 	case "notify":
-		if err := sendNotify(*sev, *ttl, strings.Join(flag.Args(), " ")); err != nil {
-			log.Fatal(err)
-		}
-		return
+		log.Fatal("notifications moved to tft-notify: tft-notify -l warn \"build finished\" (tft-notify --help)")
 	case "":
 	default:
-		log.Fatalf("unknown command %q (use: install, uninstall, notify)", cmd)
+		log.Fatalf("unknown command %q (use: install, uninstall)", cmd)
 	}
 	cpuT := cpuTempFile()
 	collectors, eng, pan, gpus = startCollectors(), newEngine(), newPanel(), startGPU()
 	loadCfg()
-	listenNotify(eng)
 	listenCtl(eng)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)

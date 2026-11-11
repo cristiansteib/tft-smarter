@@ -245,13 +245,14 @@ func TestControlCommands(t *testing.T) {
 	if r := call(`{"cmd":"notify","text":""}`); r.OK {
 		t.Fatal("empty notify must fail")
 	}
-	if r := call(`{"cmd":"notify","sev":"crit","ttl":1,"text":"build finished"}`); !r.OK {
+	if r := call(`{"cmd":"notify","sev":"crit","ttl":60,"text":"build finished"}`); !r.OK { // the desktop app's short form
 		t.Fatalf("notify: %+v", r)
 	}
-	e.eval(fixture(), time.Now())
-	list, take, _ := e.view(time.Now())
-	if len(list) != 1 || list[0].sev != sevCrit || list[0].title != "build finished" || !take {
-		t.Fatalf("notification: %+v take=%v", list, take)
+	if a, _ := notes.list(time.Now()); len(a) != 1 || a[0].Level != "error" || a[0].Title != "build finished" || a[0].Expires == nil {
+		t.Fatalf("notification: %+v", a)
+	}
+	if r := call(`{"cmd":"dismiss","all":true}`); !r.OK {
+		t.Fatalf("dismiss: %+v", r)
 	}
 	if r := call(`{"cmd":"bogus"}`); r.OK || r.Error != "unknown cmd" {
 		t.Fatalf("unknown: %+v", r)
@@ -264,7 +265,7 @@ func TestControlCommands(t *testing.T) {
 	b, _ := json.Marshal(p.doc(s, e, 1, 2, 3, now))
 	for _, k := range []string{`"connected"`, `"gauges"`, `"cpuT"`, `"gpuLimit"`, `"latency"`, `"down"`, `"uptime"`, `"load"`, `"ncpu"`, `"disks"`, `"psi"`,
 		`"topCpu"`, `"topMem"`, `"panel"`, `"page"`, `"subs"`, `"pin"`, `"full"`, `"pages"`, `"eligible"`, `"enabled"`, `"cells"`, `"slot"`, `"style"`, `"pct"`, `"text"`,
-		`"alerts"`, `"sev"`, `"docker"`, `"hog"`} {
+		`"alerts"`, `"docker"`, `"hog"`, `"notices"`, `"accent"`} {
 		if !bytes.Contains(b, []byte(k)) {
 			t.Errorf("state document lost %s", k)
 		}

@@ -39,8 +39,9 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
         @if (st.panel.full) {
           @for (r of rows(); track r.row) {
             <g [attr.transform]="'translate(0,' + (4 + r.row * 31) + ')'">
-              <text x="14" [attr.y]="r.big ? 24 : 20" [attr.fill]="r.labelCol" [attr.font-size]="r.big ? 24 : 15">{{ r.label }}</text>
-              @if (r.big) { <rect x="14" y="27" width="452" height="1" fill="#1c2636" /> }
+              @if (r.head) { <rect x="0" y="-4" width="480" height="35" [attr.fill]="r.col" /> }
+              <text [attr.x]="r.lx" [attr.y]="r.big ? 24 : 20" [attr.fill]="r.labelCol" [attr.font-size]="r.big ? 24 : 15" [attr.font-weight]="r.big ? 700 : 400">{{ r.label }}</text>
+              @if (r.big && r.row === 0 && !note()) { <rect x="14" y="27" width="452" height="1" fill="#1c2636" /> }
               @if (r.bar) {
                 <rect x="170" y="3" width="220" height="20" fill="none" stroke="#9aa3ad" />
                 <rect x="171" y="4" [attr.width]="r.fill" height="18" [attr.fill]="r.col" />
@@ -52,10 +53,11 @@ const tempPct = (t: number) => (t <= 20 ? 0 : t >= 100 ? 100 : ((t - 20) * 100) 
                   <text x="398" y="32" [attr.fill]="r.swapCol" font-size="8">{{ r.swap }}%</text>
                 }
               } @else if (r.val) {
-                <text x="466" [attr.y]="r.big ? 24 : 20" text-anchor="end" [attr.fill]="r.col" [attr.font-size]="r.big ? 24 : 15">{{ r.val }}</text>
+                <text x="466" [attr.y]="r.big ? 24 : 20" text-anchor="end" [attr.fill]="r.head ? '#000' : r.col" font-size="15" font-weight="700">{{ r.val }}</text>
               }
             </g>
           }
+          @if (note()) { <rect x="0" y="35" width="6" height="265" [attr.fill]="st.panel.accent[0]" /> }
           @if (st.panel.page === 'net') {
             <text x="26" y="170" fill="#8a9bb4" font-size="9">Traffic</text>
             <text x="80" y="170" fill="#27d6b4" font-size="9">down</text><text x="112" y="170" fill="#ff8a3d" font-size="9">up</text>
@@ -162,17 +164,24 @@ export class TftScreen {
     ];
   });
 
+  /** the notice page: palette 9 / 10 are its accent, the header is drawn on it */
+  note = computed(() => this.s()?.panel.page === 'note');
+
   rows = computed(() => {
     const st = this.s();
     if (!st) return [];
+    const pal = [...PAL, ...(st.panel.accent?.[0] ? st.panel.accent : ['#4fe6ff', '#1c2636'])];
+    const note = st.panel.page === 'note';
     return st.panel.cells.map((c: Cell) => {
       const bar = !!(c.style & 0x10), big = !!(c.style & 0x40), bright = !!(c.style & 0x80);
-      const col = PAL[Math.min(c.style & 15, 8)];
+      const col = pal[Math.min(c.style & 15, 10)];
+      const head = note && c.slot === 0;
       let [label, val] = c.text.split('\t');
       const sub = bar && !!(c.style & 0x20);
       const swap = sub ? Math.min(100, parseInt(label.slice(0, 3), 10) || 0) : 0;
       if (sub) label = label.slice(3);
-      return { row: c.slot, label, val: val ?? '', bar, big, sub, swap, swapCol: swap >= 60 ? PAL[5] : swap >= 25 ? PAL[4] : '#b4a0f0', col, labelCol: bright || big ? col : bar ? '#fff' : PAL[1], fill: (218 * Math.min(c.pct, 100)) / 100 };
+      return { row: c.slot, label, val: val ?? '', bar, big, sub, swap, swapCol: swap >= 60 ? PAL[5] : swap >= 25 ? PAL[4] : '#b4a0f0', col, head, lx: note && !head ? 22 : 14,
+        labelCol: head ? '#000' : bright || big ? col : bar ? '#fff' : PAL[1], fill: (218 * Math.min(c.pct, 100)) / 100 };
     });
   });
 

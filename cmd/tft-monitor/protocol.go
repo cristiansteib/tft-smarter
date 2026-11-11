@@ -77,6 +77,7 @@ const (
 	frameBye     = 7  // 3 bytes: reason (1 off, 2 reboot, 3 monitor stopped) | hh | mm
 	frameBand    = 4  // 3 bytes: page idx | page count | flags (bits0-1 severity, bit2 clear band, bit3 border visible)
 	frameCell    = 5  // slot | style | pct | "label\tvalue"
+	frameColor   = 12 // 3 bytes: palette index (9 accent, 10 dim accent) | RGB565 (u16 LE) - colours of the notice page
 )
 
 // Cell style: low nibble = palette index of the value; high bits are flags.
@@ -161,6 +162,10 @@ func pageFrame(slot byte, pinned bool) []byte {
 	return frame(framePage, []byte{slot, byte(b2i(pinned))})
 }
 func cmdFrame(cmd byte) []byte { return frame(frameCmd, []byte{cmd}) }
+
+func colorFrame(idx byte, c uint16) []byte {
+	return frame(frameColor, []byte{idx, byte(c), byte(c >> 8)})
+}
 
 // menuSlot maps a page to its entry in the board's bottom menu (Home CPU RAM Net Claude System Setup).
 func menuSlot(name string) byte {

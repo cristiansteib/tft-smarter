@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/cristiansteib/tft-smarter/internal/notify"
 )
 
 // panel drives the bottom info band: it rotates through pages, lets alerts take over,
@@ -20,6 +22,7 @@ type panel struct {
 	lastBandT time.Time
 	manual    string // page chosen with "Next" in the UI
 	manualEnd time.Time
+	manualAt  time.Time // when it was chosen: a notice newer than that interrupts it
 	full      bool      // the Mega currently shows a full-screen page
 	hold      time.Time // the Mega is busy repainting after a screen switch: send nothing until then
 	repaint   bool      // force the board to repaint the current screen (the menu was drawn over it)
@@ -27,6 +30,10 @@ type panel struct {
 	lastTap   touchEv   // the previous tap, for double-tap detection
 	sentSlot  int       // last menu slot sent to the board (-1 = none yet)
 	elig      []string  // pages eligible on this tick (the hysteresis latches run once per tick, in tick)
+	noteIdx   int       // which active notice is up (swipe to change)
+	noteID    string    // the notice on screen
+	noteAt    time.Time // when it came up: taps right after that do not dismiss it
+	accent    [2]uint16 // accent colours sent to the board (palette 9 and 10)
 }
 
 func newPanel() *panel { return &panel{shown: map[byte]cell{}, sentSlot: -1} }
@@ -139,6 +146,9 @@ func screenMode(name string, clear bool) byte {
 	}
 	if name == "net" {
 		m |= 0x08 // the traffic scope
+	}
+	if name == "note" {
+		m |= 0x04 // a notice: accent strip and header
 	}
 	return m
 }
@@ -335,7 +345,17 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 	if p.manual != "" && now.Before(p.manualEnd) { // a page chosen by touch (or the settings) wins over the pin for a while
 		pin, override = p.manual, true
 	}
-	if pin != "" && (override || isFull(pin) || !takeover) { // a pinned full page stays even when an alert fires
+	active, _ := notes.list(now)
+	var note *notify.Notice
+	if len(active) > 0 && !(override && p.manualAt.After(newest(active))) { // notices win, unless you opened a page after the last one came
+		p.noteIdx = (p.noteIdx%len(active) + len(active)) % len(active)
+		note, name = &active[p.noteIdx], "note"
+		if note.ID != p.noteID {
+			p.noteID, p.noteAt = note.ID, now
+		}
+		acc := note.Accent()
+		p.setAccent([2]uint16{notify.RGB565(acc), notify.RGB565(notify.Dim(acc, 0.35))})
+	} else if pin != "" && (override || isFull(pin) || !takeover) { // a pinned full page stays even when an alert fires
 		name = pin // pinned from the UI: hold this page (its own screens still roll); alerts still win
 		if p.name == pin {
 			sub = p.sub
@@ -350,7 +370,7 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		name = "alerts"
 	} else {
 		cur := slices.Index(names, p.name)
-		if cur < 0 && isFull(p.name) && now.Sub(p.enteredAt) < minFull {
+		if cur < 0 && isFull(p.name) && p.name != "note" && now.Sub(p.enteredAt) < minFull {
 			name, sub = p.name, p.sub // a full page stays at least 10 s even if its reason just went away
 		} else if cur < 0 {
 			name, p.enteredAt = names[0], now
@@ -380,7 +400,7 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		p.lastFull = now
 	} else if now.Sub(p.lastFull) >= 10*time.Second {
 		clear(p.shown)
-		p.pending = append([][]byte{screenFrame(screenMode(p.name, false)), pageFrame(menuSlot(p.name), held == p.name)}, p.pending...) // self-heal if the Mega missed the switch
+		p.pending = append(append(p.colors(), screenFrame(screenMode(p.name, false)), pageFrame(menuSlot(p.name), held == p.name)), p.pending...) // self-heal if the Mega missed the switch
 		p.lastFull = now
 	}
 	if p.repaint { // the menu was drawn over this screen: repaint it fully, then every cell again
@@ -407,7 +427,13 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		p.pending = append(p.pending, bandFrame(idx, len(names), maxSev, false, border)) // queued, so it lands after a screen switch
 	}
 	var have [256]bool
-	for _, c := range p.build(name, sub, s, list, take, since, now) {
+	var cells []cell
+	if note != nil {
+		cells = noteCells(*note, p.noteIdx, len(active), now)
+	} else {
+		cells = p.build(name, sub, s, list, take, since, now)
+	}
+	for _, c := range cells {
 		have[c.slot] = true
 		if old, ok := p.shown[c.slot]; !ok || !similar(old, c) {
 			p.shown[c.slot] = c
@@ -424,9 +450,12 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 		return nil
 	}
 	n := min(3, len(p.pending)) // pacing: the Mega draws slowly and has a small RX buffer
-	if n > 0 && p.pending[0][2] == frameScreen {
-		n = 1 // clearing / repainting the screen takes a while: let it finish before sending rows
-		p.hold = now.Add(700 * time.Millisecond)
+	for i := range n {
+		if p.pending[i][2] == frameScreen {
+			n = i + 1 // clearing / repainting the screen takes a while: let it finish before sending rows
+			p.hold = now.Add(700 * time.Millisecond)
+			break
+		}
 	}
 	out := p.pending[:n:n]
 	p.pending = p.pending[n:]
@@ -436,10 +465,41 @@ func (p *panel) tick(now time.Time, s *snapshot, e *engine) [][]byte {
 // newScreen forgets what the board shows and queues a fresh screen: the mode frame first, then (dashboard) a cleared band.
 func (p *panel) newScreen(mode byte, sev int) {
 	clear(p.shown)
-	p.pending = [][]byte{screenFrame(mode)}
+	p.pending = append(p.colors(), screenFrame(mode))
 	if !p.full {
 		p.pending = append(p.pending, bandFrame(0, 0, sev, true, true))
 	}
+}
+
+// colors are the frames that set the accent palette, for the notice page (nothing on other pages).
+func (p *panel) colors() [][]byte {
+	if p.name != "note" {
+		return nil
+	}
+	return [][]byte{colorFrame(pAccent, p.accent[0]), colorFrame(pAccentLo, p.accent[1])}
+}
+
+// setAccent changes the notice colours. On the notice page the board repaints its rows in the new colours, so every
+// row is sent again; on the way in, newScreen sends them before the screen switch.
+func (p *panel) setAccent(a [2]uint16) {
+	if a == p.accent {
+		return
+	}
+	p.accent = a
+	if p.name == "note" {
+		clear(p.shown)
+		p.pending = append(p.pending, p.colors()...)
+	}
+}
+
+func newest(ns []notify.Notice) time.Time {
+	var t time.Time
+	for _, n := range ns {
+		if n.Updated.After(t) {
+			t = n.Updated
+		}
+	}
+	return t
 }
 
 func b2i(b bool) int {

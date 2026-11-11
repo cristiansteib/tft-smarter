@@ -2,10 +2,7 @@ package main
 
 import (
 	"fmt"
-	"net"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,18 +46,15 @@ type engine struct {
 	lvl       map[string]int // latched level per key
 	count     map[string]int // consecutive true ticks per key
 	active    map[string]*alert
-	notes     map[string]*alert
 	resolved  []*alert
 	announced map[string]int
 	takeStart time.Time
 	takeUntil time.Time
 	lastTake  time.Time
-	noteSeq   int
 }
 
 func newEngine() *engine {
-	return &engine{lvl: map[string]int{}, count: map[string]int{}, active: map[string]*alert{},
-		notes: map[string]*alert{}, announced: map[string]int{}}
+	return &engine{lvl: map[string]int{}, count: map[string]int{}, active: map[string]*alert{}, announced: map[string]int{}}
 }
 
 func (e *engine) latch(key string, v, warn, warnClear, crit, critClear float64) int {
@@ -83,16 +77,6 @@ func (e *engine) sustained(key string, cond bool, secs int) bool {
 	}
 	e.count[key]++
 	return e.count[key] >= secs
-}
-
-// notify adds a user notification (from the notify socket).
-func (e *engine) notify(sev int, ttl time.Duration, text string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.noteSeq++
-	key := "notify:" + strconv.Itoa(e.noteSeq)
-	now := time.Now()
-	e.notes[key] = &alert{key: key, sev: sev, title: text, detail: "notification", since: now, expire: now.Add(ttl)}
 }
 
 // eval is called once per second.
@@ -142,13 +126,6 @@ func (e *engine) eval(s *snapshot, now time.Time) {
 	if s.latFails >= 3 {
 		add("net", sevWarn, "NO INTERNET", "3 probes to 1.1.1.1 failed")
 	}
-	for k, n := range e.notes {
-		if now.After(n.expire) {
-			delete(e.notes, k)
-			continue
-		}
-		want[k] = n
-	}
 	// diff against the previous evaluation
 	for k, a := range want {
 		if old, ok := e.active[k]; ok {
@@ -164,11 +141,9 @@ func (e *engine) eval(s *snapshot, now time.Time) {
 	for k, old := range e.active {
 		if _, ok := want[k]; !ok {
 			delete(e.announced, k)
-			if !strings.HasPrefix(k, "notify:") {
-				e.resolved = append(e.resolved, &alert{key: k, sev: sevOK, title: "RESOLVED", detail: old.title, expire: now.Add(4 * time.Second)})
-				if now.After(e.takeUntil) {
-					e.takeStart, e.takeUntil = now, now.Add(4*time.Second)
-				}
+			e.resolved = append(e.resolved, &alert{key: k, sev: sevOK, title: "RESOLVED", detail: old.title, expire: now.Add(4 * time.Second)})
+			if now.After(e.takeUntil) {
+				e.takeStart, e.takeUntil = now, now.Add(4*time.Second)
 			}
 		}
 	}
@@ -212,49 +187,4 @@ func (e *engine) view(now time.Time) (list []*alert, takeover bool, since time.T
 		e.resolved = keep
 	}
 	return list, takeover, e.takeStart
-}
-
-// ---- notify socket: `tft-monitor notify [-sev warn] [-ttl 60] text` ----
-
-func notifySock() string {
-	d := os.Getenv("XDG_RUNTIME_DIR")
-	if d == "" {
-		d = "/run/user/" + strconv.Itoa(os.Getuid())
-	}
-	return d + "/tft-monitor.sock"
-}
-
-func listenNotify(e *engine) {
-	path := notifySock()
-	os.Remove(path)
-	c, err := net.ListenPacket("unixgram", path)
-	if err != nil {
-		return
-	}
-	go func() {
-		buf := make([]byte, 512)
-		for {
-			n, _, err := c.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			f := strings.SplitN(string(buf[:n]), "\x1f", 3)
-			if len(f) != 3 {
-				continue
-			}
-			sev := map[string]int{"info": sevInfo, "warn": sevWarn, "crit": sevCrit}[f[0]]
-			ttl, _ := strconv.Atoi(f[1])
-			e.notify(max(sev, sevInfo), time.Duration(max(ttl, 5))*time.Second, f[2])
-		}
-	}()
-}
-
-func sendNotify(sev string, ttl int, text string) error {
-	c, err := net.Dial("unixgram", notifySock())
-	if err != nil {
-		return fmt.Errorf("is tft-monitor running? %w", err)
-	}
-	defer c.Close()
-	_, err = c.Write([]byte(sev + "\x1f" + strconv.Itoa(ttl) + "\x1f" + text))
-	return err
 }

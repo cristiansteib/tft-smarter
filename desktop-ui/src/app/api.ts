@@ -5,6 +5,12 @@ export interface Cell { slot: number; style: number; pct: number; text: string }
 export interface Page { name: string; eligible: boolean; enabled: boolean }
 export interface Alert { key: string; title: string; detail: string; sev: number }
 export interface Proc { name: string; v: number }
+export type Level = 'info' | 'success' | 'warn' | 'error' | 'action';
+export interface Message {
+  id?: string; level?: Level; title: string; body?: string; source?: string; action?: string;
+  progress?: number; fields?: Record<string, string>; color?: string; view?: 'auto' | 'simple' | 'detail'; ttl?: number;
+}
+export interface Notice extends Message { id: string; level: Level; state: string; created: string; updated: string; expires?: string }
 export interface State {
   connected: boolean;
   updated: string;
@@ -17,10 +23,11 @@ export interface State {
   psi: [number, number, number];
   topCpu: Proc[];
   topMem: Proc[];
-  panel: { page: string; sub: number; subs: number; pin: string; full: boolean; pages: Page[]; cells: Cell[] };
+  panel: { page: string; sub: number; subs: number; pin: string; full: boolean; pages: Page[]; cells: Cell[]; accent: [string, string] };
   alerts: Alert[];
   docker: Record<string, number>;
   hog: { cpu: boolean; mem: boolean };
+  notices: Notice[];
 }
 export interface Settings {
   hogCpu: number; hogMem: number; loadTrigger: number; ramTrigger: number;
@@ -72,7 +79,9 @@ export class Api {
   next() { return this.ctl({ cmd: 'next' }); }
   prev() { return this.ctl({ cmd: 'prev' }); }
   goto(page: string) { return this.ctl({ cmd: 'goto', page }); }
-  notify(sev: string, ttl: number, text: string) { return this.ctl({ cmd: 'notify', sev, ttl, text }); }
+  notify(message: Message) { return this.ctl<Notice>({ cmd: 'notify', message }); }
+  dismiss(id: string) { return this.ctl({ cmd: 'dismiss', id, by: 'ui' }); }
+  dismissAll() { return this.ctl({ cmd: 'dismiss', all: true, by: 'ui' }); }
   service(action: string) { return invoke<string>('service', { action }); }
   logs(lines = 150) { return invoke<string>('logs', { lines }); }
 }
