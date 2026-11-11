@@ -72,7 +72,7 @@ mise run ui-build     # release binary in desktop-ui/src-tauri/target/release
 
 ## Install and update
 
-Releases are cut by [semantic-release](https://semantic-release.gitbook.io) from the commit messages on every push to `main` (`fix:` makes a patch release, `feat:` a minor one, `feat!:` or `BREAKING CHANGE:` a major one; other commits release nothing). GoReleaser then attaches raw binaries (`tft-notify_<os>_<arch>`, `tft-monitor_linux_<arch>`), `compat.json` and a cosign-signed `checksums.txt`.
+Releases are cut by [semantic-release](https://semantic-release.gitbook.io) from the commit messages on every push to `main` (`fix:` makes a patch release, `feat:` a minor one, `feat!:` or `BREAKING CHANGE:` a major one; other commits release nothing). GoReleaser then attaches raw binaries (`tft-notify_<os>_<arch>`, `tft-monitor_linux_<arch>`), the board's `firmware.hex`, `compat.json` and a cosign-signed `checksums.txt`.
 
 **tft-notify** (every user, every machine) comes from mise:
 
@@ -80,6 +80,8 @@ Releases are cut by [semantic-release](https://semantic-release.gitbook.io) from
 mise use -g github:cristiansteib/tft-smarter     # see the dotfiles for the asset pattern
 tft-notify agents-install                       # the skill for coding agents
 ```
+
+Shell completion works the same way as in multiversectl. `tft-notify completion` installs it for your shell after asking (`--yes` skips the question, `--uninstall` removes it), and a newer tft-notify rewrites it after an upgrade. `tft-notify completion zsh` prints the script instead. Completion covers commands, flags, levels, colours and the ids of the notices on screen.
 
 **tft-monitor** (the account the board is plugged into) runs as a systemd user service:
 
@@ -95,7 +97,7 @@ tft-monitor uninstall
 Updates work the way they do in multiversectl:
 
 - `tft-notify self-update` checks the download against `checksums.txt` and swaps the binary in place. If mise installed it, it runs `mise upgrade` instead. Then it refreshes the agent skill and asks the running monitor to update too.
-- The monitor updates itself. A released build checks a couple of minutes after it starts, then every 6 h, and replaces its own binary and restarts in place. It skips a release whose `compat.json` says it cannot drive the board's firmware.
+- The monitor updates itself. A released build checks a couple of minutes after it starts, then every 6 h, replaces its own binary and restarts in place, then flashes the board if that release's firmware is needed (see below). It skips a release that would need new firmware over a build from source.
 - In a terminal, tft-notify says when a release is out. The check runs in the background at most every 6 h and never with `--json`, so it costs agents nothing. `TFT_NO_UPDATE_CHECK=1` turns all of it off. Builds from source (`dev`) never update.
 
 ## Versions and compatibility
@@ -112,12 +114,23 @@ tft-monitor  0.16.0  drives firmware protocol 1..1, auto-update on: up to date
 firmware     v0.16.0  protocol 1  ok
 ```
 
-`status` exits 6 on a mismatch. The monitor also logs a mismatch and shows it on the screen once. Old firmware means flash it (`mise run flash`); a monitor older than the firmware updates itself.
+`status` exits 6 on a mismatch, and the monitor also logs a mismatch and shows it on the screen once.
+
+### Flashing the firmware
+
+`tft-monitor` flashes the board itself. It speaks the Mega 2560 bootloader's STK500v2 protocol (`internal/flash`), so you don't need avrdude or PlatformIO. Every page is read back and verified, and the bootloader is never touched, so a flash that fails part way can always be retried. The running monitor owns the serial port, so it does the flashing: it closes the port, flashes, and reconnects.
+
+```
+tft-monitor flash                  # this release's firmware.hex (checksum-verified)
+tft-monitor flash -hex FILE.hex    # any build (mise run flash: build the firmware and flash it)
+```
+
+A released monitor keeps the firmware in step by itself. It flashes when the board's firmware is too old to drive, or when it's an older release whose firmware source has changed since then (`firmwareSince` in `compat.json`). It never overwrites a build from source (`v0.16.1-2-gabc`, `-dirty`): flash those back yourself. It also updates itself to a release that needs newer firmware, then flashes that firmware.
 
 ## Develop
 
 ```
-mise run flash      # stop the service, upload firmware, start the service again
+mise run flash      # build the firmware and flash it through the running monitor (no need to stop it)
 mise run monitor    # build + run the monitor
 ```
 

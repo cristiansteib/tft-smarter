@@ -111,6 +111,12 @@ func init() {
 		{Name: "self-update", Usage: "tft-notify self-update [--check]", Summary: "update tft-notify (and tft-monitor) to the latest release",
 			Flags: []opt{{Name: "check", Type: "bool", Help: "only say whether one is out"}, jsonOpt}, run: cmdSelfUpdate},
 		{Name: "version", Usage: "tft-notify version", Summary: "this build's version", Flags: []opt{jsonOpt}, run: cmdVersion},
+		{Name: "completion", Usage: "tft-notify completion [bash|zsh|fish]", Summary: "install shell completions (asks first), or print a shell's script",
+			Flags: []opt{
+				{Name: "shell", Type: "string", Enum: shells, Arg: "SHELL", Help: "bash, zsh or fish (default: from $SHELL)"},
+				{Name: "yes", Short: "y", Type: "bool", Help: "install without asking"},
+				{Name: "uninstall", Type: "bool", Help: "remove what was installed"},
+				jsonOpt}, run: cmdCompletion},
 	}
 }
 
@@ -608,6 +614,15 @@ func helpJSON() string {
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(argv []string) int {
+	if len(argv) > 0 && argv[0] == "__complete" { // what the shell completion scripts ask
+		for _, c := range complete(argv[1:]) {
+			fmt.Fprintln(stdout, c)
+		}
+		return exitOK
+	}
+	if len(argv) == 0 || argv[0] != "completion" {
+		refreshCompletions()
+	}
 	wantJSON := slices.Contains(argv, "--json")
 	for _, s := range argv {
 		if s == "--" {

@@ -217,7 +217,7 @@ func cmdSelfUpdate(a *args) error {
 func startUpdateCheck(a *args) func() {
 	none := func() {}
 	switch a.cmd.Name {
-	case "self-update", "version", "status", "agents-install":
+	case "self-update", "version", "status", "agents-install", "completion":
 		return none
 	}
 	if a.json || !selfupdate.Enabled() || !terminal(os.Stderr) {

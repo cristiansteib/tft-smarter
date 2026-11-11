@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cristiansteib/tft-smarter/internal/notify"
+	"github.com/cristiansteib/tft-smarter/internal/version"
 )
 
 // the tests never reach a real daemon through the shared socket
@@ -181,5 +182,78 @@ func TestStatus(t *testing.T) {
 	compatible = true
 	if code, out := capture(t, "status"); code != 0 || !strings.Contains(out, "protocol 0  ok") {
 		t.Fatalf("fits: %d %s", code, out)
+	}
+}
+
+func TestComplete(t *testing.T) {
+	has := func(got []string, v string) bool {
+		for _, g := range got {
+			if strings.SplitN(g, "\t", 2)[0] == v {
+				return true
+			}
+		}
+		return false
+	}
+	if c := complete([]string{"st"}); !has(c, "status") || has(c, "send") {
+		t.Errorf("commands: %q", c)
+	}
+	if c := complete([]string{"-l", ""}); !has(c, "action") || !has(c, "info") {
+		t.Errorf("levels: %q", c)
+	}
+	if c := complete([]string{"Title", "--"}); !has(c, "--level") || !has(c, "--wait") {
+		t.Errorf("send flags: %q", c)
+	}
+	if c := complete([]string{"list", "--"}); !has(c, "--all") || has(c, "--level") {
+		t.Errorf("list flags: %q", c)
+	}
+	if c := complete([]string{"--color", "pi"}); len(c) != 1 || !has(c, "pink") {
+		t.Errorf("colours: %q", c)
+	}
+	if c := complete([]string{"completion", ""}); !has(c, "zsh") {
+		t.Errorf("completion shells: %q", c)
+	}
+	fake(t, func(notify.Request) any {
+		return map[string]any{"active": []notify.Notice{{Message: notify.Message{ID: "ab12", Level: "warn", Title: "Disk"}}}}
+	})
+	if c := complete([]string{"dismiss", "a"}); len(c) != 1 || c[0] != "ab12\twarn: Disk" {
+		t.Errorf("ids: %q", c)
+	}
+}
+
+func TestCompletionInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("ZDOTDIR", "")
+	os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export A=1\n"), 0o644)
+	for i := 0; i < 2; i++ { // twice: the second changes nothing
+		if code, out := capture(t, "completion", "--shell", "zsh", "--yes"); code != 0 {
+			t.Fatalf("install: %d %s", code, out)
+		}
+	}
+	rc, _ := os.ReadFile(filepath.Join(home, ".zshrc"))
+	if strings.Count(string(rc), rcBegin) != 1 || !strings.HasPrefix(string(rc), "export A=1\n") {
+		t.Fatalf(".zshrc: %q", rc)
+	}
+	f := filepath.Join(home, ".local/share/tft-notify/completions/tft-notify.zsh")
+	if installedVersion(f) != version.Get() {
+		t.Fatal("the script records its version")
+	}
+	os.WriteFile(f, []byte(versionKey+"0.0.1\nold\n"), 0o644)
+	refreshCompletions()
+	if installedVersion(f) != version.Get() {
+		t.Fatal("an older script is rewritten")
+	}
+	if code, _ := capture(t, "completion", "--shell", "zsh", "--uninstall"); code != 0 {
+		t.Fatal("uninstall")
+	}
+	if rc, _ := os.ReadFile(filepath.Join(home, ".zshrc")); string(rc) != "export A=1\n" {
+		t.Fatalf("uninstall left %q", rc)
+	}
+	if _, err := os.Stat(f); !os.IsNotExist(err) {
+		t.Fatal("uninstall left the script")
+	}
+	if code, out := capture(t, "completion", "bash"); code != 0 || !strings.Contains(out, "complete -o default -F _tft_notify tft-notify") {
+		t.Fatalf("print: %d %s", code, out)
 	}
 }
